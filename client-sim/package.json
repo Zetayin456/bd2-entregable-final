@@ -1,0 +1,9 @@
+﻿{
+  "name": "client-sim",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "pouchdb": "^9.0.0"
+  }
+}
