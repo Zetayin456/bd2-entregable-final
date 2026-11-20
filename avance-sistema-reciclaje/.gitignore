@@ -1,0 +1,18 @@
+# Credenciales privadas
+backend/.env*
+!backend/.env.example
+
+# Dependencias y compilaciones
+node_modules/
+frontend/node_modules/
+frontend/dist/
+backend/target/
+
+# Archivos temporales
+*.log
+.DS_Store
+Thumbs.db
+
+# Copias de seguridad del código
+backend/src/main_respaldo.rs
+backend/src/main_antes_roles.rs

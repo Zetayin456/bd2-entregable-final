@@ -22,3 +22,8 @@ Thumbs.db
 ehthumbs.db
 .vscode/
 .idea/
+
+# Variables de entorno y credenciales
+.env
+.env.*
+!.env.example

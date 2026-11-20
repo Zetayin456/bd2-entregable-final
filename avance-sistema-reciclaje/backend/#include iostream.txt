@@ -1,0 +1,11 @@
+#include <iostream>
+using namespace std;
+struct nodo{
+int dato;
+nodo*siguiente;
+nodo(int dato){
+dato=valor;
+soguiente=nullptr;
+    }
+
+}
