@@ -11,7 +11,6 @@
 - Brandon Douglas Arana Martinez - Carnet: AM23104
 
 ---
-s
 ## 15. Conclusiones y Referencias (APA 7.ª Edición)
 
 ### 15.1 Conclusiones Técnicas
