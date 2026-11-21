@@ -192,6 +192,9 @@ async fn calculate_points(a: &App, pesaje: &Value) -> Result<(i64, Value), ()> {
         return Err(());
     }
     let rules = rules_response.json::<Value>().await.map_err(|_| ())?;
+    calculate_points_with_rules(pesaje, &rules)
+}
+fn calculate_points_with_rules(pesaje: &Value, rules: &Value) -> Result<(i64, Value), ()> {
     let rates = rules
         .get("puntos_por_kg")
         .and_then(Value::as_object)
@@ -231,7 +234,7 @@ async fn calculate_points(a: &App, pesaje: &Value) -> Result<(i64, Value), ()> {
     if points <= 0 {
         return Err(());
     }
-    Ok((points, rules))
+    Ok((points, rules.clone()))
 }
 async fn ensure_points_for_pesaje(a: &App, pesaje: &Value) -> Result<Value, ()> {
     let pesaje_id = pesaje.get("_id").and_then(Value::as_str).ok_or(())?;
@@ -619,6 +622,18 @@ async fn validate_weighing(
             "El estado del pesaje no es válido.",
         );
     }
+    if state == "verificado"
+        && old.and_then(|v| v.get("estado")).and_then(Value::as_str) == Some("verificado")
+    {
+        if old.is_some_and(|v| same_verification_event(v, d)) {
+            return None;
+        }
+        return reject(
+            StatusCode::CONFLICT,
+            "pesaje_verificado_inmutable",
+            "El pesaje ya fue verificado y no se puede alterar.",
+        );
+    }
     let commerce = d.get("comercio_id").and_then(Value::as_str).unwrap_or("");
     if commerce.is_empty()
         || commerce.len() > 200
@@ -771,7 +786,7 @@ async fn validate_weighing(
         let selector = if let Some(request_id) = d.get("solicitud_id").and_then(Value::as_str) {
             json!({"type":"pesaje","solicitud_id":request_id,"estado":{"$ne":"rechazado"}})
         } else {
-            json!({"type":"pesaje","recolector_id":c.sub,"comercio_id":commerce,"capturado_en":{"$gte":(now-Duration::hours(1)).to_rfc3339()}})
+            json!({"type":"pesaje","recolector_id":c.sub,"comercio_id":commerce,"solicitud_id":{"$exists":false},"capturado_en":{"$gte":(now-Duration::hours(1)).to_rfc3339()}})
         };
         let response = a
             .http
@@ -1107,4 +1122,78 @@ async fn main() {
         .await
         .expect("No se pudo enlazar puerto");
     axum::serve(l, app).await.expect("Error HTTP");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claims(role: &str) -> Claims {
+        Claims {
+            sub: "prueba".into(),
+            role: role.into(),
+            comercio_id: Some("comercio:prueba".into()),
+            exp: 0,
+        }
+    }
+
+    #[test]
+    fn calcula_puntos_segun_material_y_peso() {
+        let rules = json!({"version":1,"puntos_por_kg":{"carton":5,"plastico":10}});
+        let pesaje = json!({"lineas":[{"material":"carton","peso_kg":10.0},{"material":"plastico","peso_kg":2.0}]});
+        let (points, applied_rules) = calculate_points_with_rules(&pesaje, &rules).unwrap();
+        assert_eq!(points, 70);
+        assert_eq!(applied_rules["version"], 1);
+    }
+
+    #[test]
+    fn rechaza_material_desconocido_peso_fuera_de_rango_y_exceso_de_lineas() {
+        let rules = json!({"puntos_por_kg":{"carton":5}});
+        assert!(calculate_points_with_rules(
+            &json!({"lineas":[{"material":"organico","peso_kg":1.0}]}),
+            &rules
+        )
+        .is_err());
+        assert!(calculate_points_with_rules(
+            &json!({"lineas":[{"material":"carton","peso_kg":1000.01}]}),
+            &rules
+        )
+        .is_err());
+        assert!(calculate_points_with_rules(
+            &json!({"lineas":[{"material":"carton","peso_kg":1000.0},{"material":"carton","peso_kg":1000.0},{"material":"carton","peso_kg":1.0}]}),
+            &rules
+        )
+        .is_err());
+        let lines = (0..11)
+            .map(|_| json!({"material":"carton","peso_kg":1.0}))
+            .collect::<Vec<_>>();
+        assert!(calculate_points_with_rules(&json!({"lineas":lines}), &rules).is_err());
+    }
+
+    #[test]
+    fn aplica_transiciones_de_solicitud_por_rol_y_estado() {
+        let operator = claims("operador_acopio");
+        let old = json!({"type":"solicitud_recoleccion","comercio_id":"comercio:prueba","estado":"pendiente"});
+        let approved = json!({"type":"solicitud_recoleccion","comercio_id":"comercio:prueba","estado":"aprobada"});
+        assert!(validate_request_transition(&operator, Some(&old), &approved).is_none());
+        let invalid = json!({"type":"solicitud_recoleccion","comercio_id":"comercio:prueba","estado":"completada"});
+        assert!(validate_request_transition(&operator, Some(&old), &invalid).is_some());
+
+        let commerce = claims("comercio");
+        assert!(validate_request_transition(
+            &commerce,
+            None,
+            &json!({"comercio_id":"comercio:prueba","estado":"pendiente"})
+        )
+        .is_none());
+        assert!(validate_request_transition(&commerce, None, &approved).is_some());
+    }
+
+    #[test]
+    fn verificacion_repetida_conserva_un_mismo_evento_y_id_de_movimiento() {
+        let original = json!({"_id":"pesaje:1","_rev":"1-a","estado":"verificado","lineas":[{"material":"carton","peso_kg":2.0}],"verificado_en":"2026-01-01T00:00:00Z"});
+        let retry = json!({"_id":"pesaje:1","_rev":"2-b","estado":"verificado","lineas":[{"material":"carton","peso_kg":2.0}],"verificado_en":"2026-01-02T00:00:00Z"});
+        assert!(same_verification_event(&original, &retry));
+        assert_eq!(movement_id("pesaje:1"), "movimiento_puntos:pesaje:pesaje:1");
+    }
 }

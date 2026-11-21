@@ -18,7 +18,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM builder AS verify
 RUN rustup component add clippy
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo check --all-targets --locked \
+    cargo test --all-targets --locked \
+    && cargo check --all-targets --locked \
     && cargo clippy --all-targets --locked -- -D warnings
 
 FROM debian:bookworm-slim AS runtime
