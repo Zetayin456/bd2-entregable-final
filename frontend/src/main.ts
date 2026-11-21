@@ -1,202 +1,123 @@
-import PouchDB from 'pouchdb-browser';
 import './style.css';
-
-type Comercio = {
-  _id?: string;
-  _rev?: string;
-  type: string;
-  nombre: string;
-  estado: string;
-  createdAt?: string;
-};
-
-const db = new PouchDB<Comercio>('sistema_reciclaje_local');
+import { api, ApiError, sesion } from './data/api';
+import type { Comercio, Documento, EstadoPesaje, MovimientoPuntos, Pesaje, Rol, SolicitudRecoleccion, TipoDocumento } from './domain/tipos';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('No se encontró el contenedor #app');
 
+const titles: Record<string, string> = { inicio: 'Panel principal', comercios: 'Comercios', solicitudes: 'Solicitudes', pesajes: 'Pesajes', puntos: 'Puntos y recompensas' };
+const roleLabels: Record<Rol, string> = { admin_plataforma: 'Administrador', operador_acopio: 'Operador de acopio', recolector: 'Recolector', comercio: 'Comercio' };
+let activeView = 'inicio';
+
 app.innerHTML = `
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-icon">♻</div>
-        <div><strong>EcoGestión</strong><small>RECICLAJE INCENTIVADO</small></div>
-      </div>
+      <div class="brand"><div class="brand-icon">♻</div><div><strong>EcoGestión</strong><small>RECICLAJE INCENTIVADO</small></div></div>
       <div class="menu-label">MENÚ PRINCIPAL</div>
-      <nav class="navigation">
-        <button class="nav-link active" data-view="inicio"><span>⌂</span> Inicio</button>
-        <button class="nav-link" data-view="comercios"><span>▦</span> Comercios</button>
-        <button class="nav-link" data-view="solicitudes"><span>▤</span> Solicitudes</button>
-        <button class="nav-link" data-view="pesajes"><span>⚖</span> Pesajes</button>
-        <button class="nav-link" data-view="puntos"><span>✧</span> Puntos y recompensas</button>
-      </nav>
-      <div class="sidebar-bottom">
-        <div class="offline-status"><i></i><div><b>Almacenamiento local</b><small>PouchDB disponible</small></div></div>
-        <small class="version">Sistema de Gestión · Versión inicial</small>
-      </div>
+      <nav class="navigation">${Object.entries({ inicio: '⌂|Inicio', comercios: '▦|Comercios', solicitudes: '▤|Solicitudes', pesajes: '⚖|Pesajes', puntos: '✧|Puntos y recompensas' }).map(([key, item]) => { const [icon, label] = item.split('|'); return `<button class="nav-link" data-view="${key}"><span>${icon}</span>${label}</button>`; }).join('')}</nav>
+      <div class="sidebar-bottom"><div class="offline-status"><i></i><div><b>API del sistema</b><small id="api-state">Sin comprobar</small></div></div><small class="version">Sistema de Gestión · Módulo 2</small></div>
     </aside>
-
     <main class="main">
-      <header class="topbar">
-        <div><span class="eyebrow">PLATAFORMA DE RECICLAJE</span><h1 id="page-title">Panel principal</h1></div>
-        <div class="profile"><div class="avatar">A</div><div><b>Administrador</b><small>Vista de demostración</small></div></div>
-      </header>
-      <section id="content" class="content">
-        <div class="welcome">
-          <div><span class="welcome-tag">♻ JUNTOS POR UN FUTURO MÁS LIMPIO</span><h2>¡Bienvenido al sistema!</h2><p>Administra comercios, solicitudes de recolección y actividades de reciclaje desde un solo lugar.</p></div>
-          <div class="welcome-art" aria-hidden="true">♻</div>
-        </div>
-
-        <div class="section-heading"><div><h2>Resumen general</h2><p>Indicadores de los registros guardados en este dispositivo.</p></div><span class="local-pill"><i></i> Datos locales</span></div>
-        <div class="stats-grid">
-          <article class="stat-card"><div class="stat-top"><span>Comercios registrados</span><span class="stat-icon green">▦</span></div><strong id="stat-comercios">0</strong><small>Registros locales</small></article>
-          <article class="stat-card"><div class="stat-top"><span>Solicitudes</span><span class="stat-icon blue">▤</span></div><strong>—</strong><small>Módulo por integrar</small></article>
-          <article class="stat-card"><div class="stat-top"><span>Pesajes registrados</span><span class="stat-icon orange">⚖</span></div><strong>—</strong><small>Módulo por integrar</small></article>
-          <article class="stat-card"><div class="stat-top"><span>Puntos entregados</span><span class="stat-icon purple">✧</span></div><strong>—</strong><small>Módulo por integrar</small></article>
-        </div>
-
-        <div class="dashboard-grid">
-          <article class="panel">
-            <div class="panel-heading"><div><h3>Accesos rápidos</h3><p>Acciones disponibles en esta versión</p></div></div>
-            <div class="quick-actions">
-              <button id="quick-add" class="quick-action"><span class="quick-icon green">＋</span><span><b>Registrar comercio</b><small>Guardar un comercio en este dispositivo</small></span><em>›</em></button>
-              <button id="quick-list" class="quick-action"><span class="quick-icon blue">☷</span><span><b>Consultar comercios</b><small>Ver los registros almacenados</small></span><em>›</em></button>
-            </div>
-          </article>
-          <article class="panel connection-panel">
-            <div class="panel-heading"><div><h3>Estado del sistema</h3><p>Almacenamiento del navegador</p></div><span class="status-badge"><i></i> Disponible</span></div>
-            <div class="connection-row"><span class="db-symbol">◈</span><div><b>PouchDB</b><small>Base de datos local</small></div><strong class="status-text">ACTIVO</strong></div>
-            <p class="note">Los registros de esta prueba se guardan en el almacenamiento local del navegador. La sincronización con el servidor todavía está pendiente.</p>
-          </article>
-        </div>
-        <div id="feedback" class="feedback" role="status" aria-live="polite"></div>
-      </section>
+      <header class="topbar"><div><span class="eyebrow">PLATAFORMA DE RECICLAJE</span><h1 id="page-title">Panel principal</h1></div><div class="profile"><div class="avatar" id="profile-avatar">?</div><div><b id="profile-name">Sin sesión</b><small id="profile-role">Inicia sesión para consultar</small></div><button id="session-button" class="secondary-button">Iniciar sesión</button></div></header>
+      <section id="content" class="content"></section>
       <footer>© 2026 Sistema de Gestión de Residuos y Reciclaje Incentivado</footer>
     </main>
-  </div>
-`;
+  </div>`;
 
 const content = document.querySelector<HTMLElement>('#content')!;
 const title = document.querySelector<HTMLElement>('#page-title')!;
-const feedback = document.querySelector<HTMLElement>('#feedback')!;
+const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+function notify(message: string, isError = false) { const target = content.querySelector<HTMLElement>('#feedback'); if (target) { target.textContent = message; target.className = `feedback ${isError ? 'error' : 'success'}`; } }
+function report(error: unknown) { notify(error instanceof ApiError ? error.message : 'Ocurrió un error al procesar la solicitud.', true); if (error instanceof ApiError && error.status === 401) { sesion.clear(); updateProfile(); renderLogin(); } }
+function updateProfile() { const role = sesion.role; document.querySelector('#profile-name')!.textContent = role ? roleLabels[role] : 'Sin sesión'; document.querySelector('#profile-role')!.textContent = role ? 'Sesión autenticada' : 'Inicia sesión para consultar'; document.querySelector('#profile-avatar')!.textContent = role ? roleLabels[role][0] : '?'; document.querySelector('#session-button')!.textContent = role ? 'Cerrar sesión' : 'Iniciar sesión'; }
 
-function notify(message: string, error = false) {
-  feedback.textContent = message;
-  feedback.className = error ? 'feedback error' : 'feedback success';
+function renderLogin() {
+  title.textContent = 'Iniciar sesión';
+  content.innerHTML = `<article class="panel form-panel"><div class="panel-heading"><div><h3>Acceso al sistema</h3><p>Usa las credenciales de tu cuenta de reciclaje.</p></div></div><form id="login-form" class="data-form"><label>Usuario<input name="username" required autocomplete="username" minlength="3" maxlength="80"></label><label>Contraseña<input name="password" type="password" required autocomplete="current-password" maxlength="256"></label><button class="primary-button" type="submit">Iniciar sesión</button></form><div id="feedback" class="feedback" role="status" aria-live="polite"></div></article>`;
+  content.querySelector<HTMLFormElement>('#login-form')!.addEventListener('submit', async event => {
+    event.preventDefault(); const form = new FormData(event.currentTarget as HTMLFormElement);
+    try { const result = await api.login(String(form.get('username')), String(form.get('password'))); sesion.save(result); updateProfile(); await openView('inicio'); }
+    catch (error) { report(error); }
+  });
 }
 
-async function getComercios() {
-  const result = await db.allDocs({ include_docs: true });
-  return result.rows
-    .map(row => row.doc)
-    .filter((doc): doc is Comercio => Boolean(doc && doc.type === 'comercio'));
+async function list<T extends Documento>(type: TipoDocumento) { return (await api.list<T>(type)).docs; }
+const dateText = (value?: string) => value ? new Date(value).toLocaleString() : '—';
+function table(headers: string[], rows: string[][]) { if (!rows.length) return '<div class="empty-state"><span>♻</span><b>No hay registros disponibles</b><p>Los datos aparecerán aquí cuando existan registros en el servidor.</p></div>'; return `<div class="table-wrap"><table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`; }
+function section(titleText: string, description: string, body: string, action = '') { content.innerHTML = `<div class="section-heading"><div><h2>${esc(titleText)}</h2><p>${esc(description)}</p></div>${action}</div><article class="panel list-panel">${body}</article><div id="feedback" class="feedback" role="status" aria-live="polite"></div>`; }
+function addAction(label: string) { return `<button id="add-record" class="primary-button">＋ ${esc(label)}</button>`; }
+
+async function renderDashboard() {
+  const [comercios, solicitudes, pesajes, movimientos] = await Promise.all([
+    list<Comercio>('comercio'), list<SolicitudRecoleccion>('solicitud_recoleccion'), list<Pesaje>('pesaje'), list<MovimientoPuntos>('movimiento_puntos')
+  ]);
+  const total = movimientos.reduce((sum, movimiento) => sum + (movimiento.concepto === 'canje' ? -movimiento.puntos : movimiento.puntos), 0);
+  content.innerHTML = `<div class="welcome"><div><span class="welcome-tag">♻ JUNTOS POR UN FUTURO MÁS LIMPIO</span><h2>¡Bienvenido al sistema!</h2><p>Consulta la información guardada en el servidor según los permisos de tu cuenta.</p></div><div class="welcome-art" aria-hidden="true">♻</div></div>
+    <div class="section-heading"><div><h2>Resumen general</h2><p>Indicadores recibidos de la API de reciclaje.</p></div><span class="local-pill"><i></i> Datos del servidor</span></div>
+    <div class="stats-grid">
+      <article class="stat-card"><div class="stat-top"><span>Comercios registrados</span><span class="stat-icon green">▦</span></div><strong>${comercios.length}</strong><small>Visibles para tu rol</small></article>
+      <article class="stat-card"><div class="stat-top"><span>Solicitudes</span><span class="stat-icon blue">▤</span></div><strong>${solicitudes.length}</strong><small>Registros visibles</small></article>
+      <article class="stat-card"><div class="stat-top"><span>Pesajes registrados</span><span class="stat-icon orange">⚖</span></div><strong>${pesajes.length}</strong><small>Registros visibles</small></article>
+      <article class="stat-card"><div class="stat-top"><span>Saldo neto registrado</span><span class="stat-icon purple">✧</span></div><strong>${total.toLocaleString()} pts</strong><small>Movimientos existentes</small></article>
+    </div><div class="dashboard-grid"><article class="panel"><div class="panel-heading"><div><h3>Accesos rápidos</h3><p>Abre un módulo para consultar o registrar información</p></div></div><div class="quick-actions"><button data-go="comercios" class="quick-action"><span class="quick-icon green">▦</span><span><b>Comercios</b><small>Consultar registros del servidor</small></span><em>›</em></button><button data-go="solicitudes" class="quick-action"><span class="quick-icon blue">▤</span><span><b>Solicitudes</b><small>Ver recolecciones solicitadas</small></span><em>›</em></button></div></article><article class="panel connection-panel"><div class="panel-heading"><div><h3>Conexión con la API</h3><p>Lectura completada</p></div><span class="status-badge"><i></i> Disponible</span></div><div class="connection-row"><span class="db-symbol">◈</span><div><b>Backend Rust</b><small>Vía proxy HTTP de Vite</small></div><strong class="status-text">ACTIVO</strong></div><p class="note">Este módulo consulta la API. No activa replicación offline ni calcula puntos automáticamente.</p></article></div><div id="feedback" class="feedback" role="status" aria-live="polite"></div>`;
+  content.querySelectorAll<HTMLButtonElement>('[data-go]').forEach(button => button.addEventListener('click', () => openView(button.dataset.go!)));
 }
 
-async function updateStats() {
-  const comercios = await getComercios();
-  const stat = document.querySelector<HTMLElement>('#stat-comercios');
-  if (stat) stat.textContent = String(comercios.length);
+async function showComercios() {
+  const docs = await list<Comercio>('comercio');
+  const canCreate = sesion.role === 'admin_plataforma' || sesion.role === 'operador_acopio';
+  section('Directorio de comercios', 'Registros obtenidos desde CouchDB a través de la API.', `<div class="panel-heading"><div><h3>Comercios registrados</h3><p>${docs.length} registro(s) visible(s)</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Nombre','Giro','Zona','Estado','Identificador'], docs.map(d => [esc(d.nombre),esc(d.giro || '—'),esc(d.zona || '—'),esc(d.activo === false ? 'inactivo' : d.estado || 'activo'),`<code>${esc(d._id)}</code>`]))}`, canCreate ? addAction('Registrar comercio') : '');
+  content.querySelector('#refresh-list')?.addEventListener('click', () => openView('comercios'));
+  content.querySelector('#add-record')?.addEventListener('click', () => formDialog('Registrar comercio', [['nombre','Nombre','text'],['giro','Giro','text'],['zona','Zona','text']], async values => { const id = `comercio:${crypto.randomUUID()}`; await api.save({ _id:id,type:'comercio',nombre:values.nombre,giro:values.giro,zona:values.zona,activo:true,creado_en:new Date().toISOString() }); await openView('comercios'); notify('Comercio guardado en el servidor.'); }));
 }
 
-async function registrarComercio() {
-  const nombre = window.prompt('Escribe el nombre del comercio:');
-  if (!nombre || !nombre.trim()) return;
-  try {
-    const result = await db.post({
-      type: 'comercio',
-      nombre: nombre.trim(),
-      estado: 'activo',
-      createdAt: new Date().toISOString()
-    });
-    notify(`Comercio guardado correctamente. Identificador: ${result.id}`);
-    await updateStats();
-    if (document.querySelector('.commerce-table')) await mostrarComercios();
-  } catch (error) {
-    notify(`No se pudo guardar el comercio: ${String(error)}`, true);
-  }
+async function showSolicitudes() {
+  const docs = await list<SolicitudRecoleccion>('solicitud_recoleccion');
+  const canCreate = sesion.role === 'comercio' || sesion.role === 'admin_plataforma';
+  section('Solicitudes de recolección', 'Solicitudes registradas en el servidor.', `<div class="panel-heading"><div><h3>Solicitudes</h3><p>${docs.length} registro(s) visible(s)</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Comercio','Estado','Fecha solicitada','Observaciones','Identificador'],docs.map(d => [esc(d.comercio_id),esc(d.estado),esc(d.fecha_solicitada || dateText(d.creada_en)),esc(d.observaciones || '—'),`<code>${esc(d._id)}</code>`]))}`, canCreate ? addAction('Crear solicitud') : '');
+  content.querySelector('#refresh-list')?.addEventListener('click', () => openView('solicitudes'));
+  content.querySelector('#add-record')?.addEventListener('click', () => formDialog('Nueva solicitud', [['comercio_id','ID del comercio','text'],['fecha_solicitada','Fecha solicitada','date'],['observaciones','Observaciones','text']], async values => { const id=`solicitud:${crypto.randomUUID()}`; await api.save({ _id:id,type:'solicitud_recoleccion',comercio_id:values.comercio_id,fecha_solicitada:values.fecha_solicitada,observaciones:values.observaciones,estado:'pendiente',creada_en:new Date().toISOString() }); await openView('solicitudes'); notify('Solicitud guardada en el servidor.'); }));
 }
 
-async function mostrarComercios() {
-  const comercios = await getComercios();
-  const target = document.querySelector<HTMLElement>('#commerce-list');
-  if (!target) return;
-  if (comercios.length === 0) {
-    target.innerHTML = '<div class="empty-state"><span>▦</span><b>Aún no hay comercios registrados</b><p>Usa el botón “Registrar comercio” para agregar el primero.</p></div>';
-    return;
-  }
-  target.innerHTML = `
-    <div class="table-wrap"><table class="commerce-table">
-      <thead><tr><th>Nombre del comercio</th><th>Estado</th><th>Identificador</th></tr></thead>
-      <tbody>${comercios.map(item => `<tr><td><b>${escapeHtml(item.nombre)}</b></td><td><span class="table-status">${escapeHtml(item.estado)}</span></td><td><code>${escapeHtml(item._id ?? '')}</code></td></tr>`).join('')}</tbody>
-    </table></div>`;
+async function showPesajes() {
+  const docs = await list<Pesaje>('pesaje');
+  const role = sesion.role;
+  const canCapture = role === 'recolector' || role === 'admin_plataforma';
+  const canVerify = role === 'operador_acopio' || role === 'admin_plataforma';
+  const rows = docs.map(d => [esc(d.comercio_id),esc(d.recolector_id),esc(d.lineas.map(line => `${line.material}: ${line.peso_kg} kg`).join(', ')),esc(d.estado),esc(dateText(d.capturado_en)),canVerify && d.estado === 'pendiente_verificacion' ? `<button class="secondary-button" data-verify="${esc(d._id)}">Verificar</button>` : `<code>${esc(d._id)}</code>`]);
+  section('Registro de pesajes', 'Pesajes capturados por recolectores y verificados por operadores.', `<div class="panel-heading"><div><h3>Pesajes</h3><p>${docs.length} registro(s) visible(s)</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Comercio','Recolector','Material y peso','Estado','Capturado','Acción'],rows)}`, canCapture ? addAction('Registrar pesaje') : '');
+  content.querySelector('#refresh-list')?.addEventListener('click', () => openView('pesajes'));
+  content.querySelectorAll<HTMLButtonElement>('[data-verify]').forEach(button => button.addEventListener('click', async () => { const doc=docs.find(item=>item._id===button.dataset.verify);if(!doc)return;try{await api.save({...doc,estado:'verificado' as EstadoPesaje,verificado_en:new Date().toISOString()});await openView('pesajes');notify('Pesaje verificado.');}catch(error){report(error);}}));
+  content.querySelector('#add-record')?.addEventListener('click', () => formDialog('Registrar pesaje', [['comercio_id','ID del comercio','text'],['material','Material','text'],['peso_kg','Peso en kg','number']], async values => { const id=`pesaje:${crypto.randomUUID()}`; await api.save({_id:id,type:'pesaje',comercio_id:values.comercio_id,recolector_id:'',lineas:[{material:values.material,peso_kg:Number(values.peso_kg)}],estado:'pendiente_verificacion',capturado_en:new Date().toISOString()}); await openView('pesajes');notify('Pesaje guardado para verificación.'); }));
 }
 
-function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, char => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[char] ?? char));
+async function showPuntos() {
+  const docs=await list<MovimientoPuntos>('movimiento_puntos');
+  const total=docs.reduce((sum,d)=>sum+(d.concepto==='canje'?-d.puntos:d.puntos),0);
+  const canCreate=sesion.role==='admin_plataforma'||sesion.role==='operador_acopio';
+  section('Puntos y recompensas', `Saldo neto según movimientos guardados: ${total.toLocaleString()} puntos.`, `<div class="panel-heading"><div><h3>Movimientos de puntos</h3><p>Los movimientos son registros existentes; el sistema aún no calcula puntos automáticamente.</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Comercio','Concepto','Puntos','Origen','Fecha'],docs.map(d=>[esc(d.comercio_id),esc(d.concepto),esc(d.puntos),esc(d.origen||'—'),esc(dateText(d.creado_en))]))}<div class="note">El backend todavía no ofrece un catálogo de recompensas ni un endpoint de canje. Esta vista refleja únicamente los movimientos disponibles.</div>`,canCreate?addAction('Registrar movimiento'):'');
+  content.querySelector('#refresh-list')?.addEventListener('click',()=>openView('puntos'));
+  content.querySelector('#add-record')?.addEventListener('click',()=>formDialog('Registrar movimiento de puntos',[['comercio_id','ID del comercio','text'],['puntos','Puntos','number'],['concepto','Concepto','select'],['origen','Origen','text']],async values=>{const id=`movimiento:${crypto.randomUUID()}`;await api.save({_id:id,type:'movimiento_puntos',comercio_id:values.comercio_id,puntos:Number(values.puntos),concepto:values.concepto as MovimientoPuntos['concepto'],origen:values.origen,creado_en:new Date().toISOString()});await openView('puntos');notify('Movimiento guardado en el servidor.');}));
+}
+
+type Field = [name: string, label: string, type: 'text'|'date'|'number'|'select'];
+function formDialog(heading: string, fields: Field[], submit: (values: Record<string,string>) => Promise<void>) {
+  const select = (name:string) => name==='concepto' ? '<option value="acreditacion">Acreditación</option><option value="canje">Canje</option>' : '';
+  content.insertAdjacentHTML('afterbegin',`<article class="panel editor-panel"><div class="panel-heading"><div><h3>${esc(heading)}</h3><p>Los cambios se envían a la API.</p></div><button type="button" id="close-form" class="secondary-button">Cerrar</button></div><form id="record-form" class="data-form">${fields.map(([name,label,type])=>`<label>${esc(label)}${type==='select'?`<select name="${esc(name)}">${select(name)}</select>`:`<input name="${esc(name)}" type="${type}" ${type==='number'?'min="0.01" step="0.01"':''} required maxlength="200">`}</label>`).join('')}<button class="primary-button" type="submit">Guardar</button></form><div id="form-feedback" class="feedback" role="status"></div></article>`);
+  const commerceField=content.querySelector<HTMLInputElement>('input[name="comercio_id"]');
+  if(commerceField&&sesion.role==='comercio'&&sesion.comercioId){commerceField.value=sesion.comercioId;commerceField.readOnly=true;}
+  content.querySelector('#close-form')?.addEventListener('click',()=>content.querySelector('.editor-panel')?.remove());
+  content.querySelector<HTMLFormElement>('#record-form')!.addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.currentTarget as HTMLFormElement);const values:Record<string,string>={};form.forEach((value,key)=>{values[key]=String(value).trim();});try{await submit(values);}catch(error){const target=content.querySelector<HTMLElement>('#form-feedback');if(target){target.textContent=error instanceof ApiError?error.message:'No se pudo guardar el registro.';target.classList.add('error');}}});
 }
 
 async function openView(view: string) {
-  document.querySelectorAll<HTMLButtonElement>('.nav-link').forEach(button => {
-    button.classList.toggle('active', button.dataset.view === view);
-  });
-  feedback.textContent = '';
-  if (view === 'inicio') {
-    title.textContent = 'Panel principal';
-    content.innerHTML = `
-      <div class="welcome"><div><span class="welcome-tag">♻ JUNTOS POR UN FUTURO MÁS LIMPIO</span><h2>¡Bienvenido al sistema!</h2><p>Administra comercios, solicitudes de recolección y actividades de reciclaje desde un solo lugar.</p></div><div class="welcome-art">♻</div></div>
-      <div class="section-heading"><div><h2>Resumen general</h2><p>Indicadores de los registros guardados en este dispositivo.</p></div><span class="local-pill"><i></i> Datos locales</span></div>
-      <div class="stats-grid">
-        <article class="stat-card"><div class="stat-top"><span>Comercios registrados</span><span class="stat-icon green">▦</span></div><strong id="stat-comercios">0</strong><small>Registros locales</small></article>
-        <article class="stat-card"><div class="stat-top"><span>Solicitudes</span><span class="stat-icon blue">▤</span></div><strong>—</strong><small>Módulo por integrar</small></article>
-        <article class="stat-card"><div class="stat-top"><span>Pesajes registrados</span><span class="stat-icon orange">⚖</span></div><strong>—</strong><small>Módulo por integrar</small></article>
-        <article class="stat-card"><div class="stat-top"><span>Puntos entregados</span><span class="stat-icon purple">✧</span></div><strong>—</strong><small>Módulo por integrar</small></article>
-      </div>
-      <div class="dashboard-grid">
-        <article class="panel"><div class="panel-heading"><div><h3>Accesos rápidos</h3><p>Acciones disponibles en esta versión</p></div></div><div class="quick-actions">
-          <button id="quick-add" class="quick-action"><span class="quick-icon green">＋</span><span><b>Registrar comercio</b><small>Guardar un comercio en este dispositivo</small></span><em>›</em></button>
-          <button id="quick-list" class="quick-action"><span class="quick-icon blue">☷</span><span><b>Consultar comercios</b><small>Ver los registros almacenados</small></span><em>›</em></button>
-        </div></article>
-        <article class="panel connection-panel"><div class="panel-heading"><div><h3>Estado del sistema</h3><p>Almacenamiento del navegador</p></div><span class="status-badge"><i></i> Disponible</span></div>
-          <div class="connection-row"><span class="db-symbol">◈</span><div><b>PouchDB</b><small>Base de datos local</small></div><strong class="status-text">ACTIVO</strong></div>
-          <p class="note">Los registros de esta prueba se guardan en el almacenamiento local del navegador. La sincronización con el servidor todavía está pendiente.</p></article>
-      </div><div id="feedback" class="feedback" role="status" aria-live="polite"></div>`;
-    await updateStats();
-    bindQuickActions();
-    return;
-  }
-
-  const labels: Record<string, string> = {
-    comercios: 'Comercios', solicitudes: 'Solicitudes', pesajes: 'Pesajes', puntos: 'Puntos y recompensas'
-  };
-  title.textContent = labels[view] ?? 'Panel principal';
-
-  if (view === 'comercios') {
-    content.innerHTML = `<div class="section-heading"><div><h2>Directorio de comercios</h2><p>Registros guardados localmente con PouchDB.</p></div><button id="add-commerce" class="primary-button">＋ Registrar comercio</button></div><article class="panel list-panel"><div class="panel-heading"><div><h3>Comercios registrados</h3><p>Información disponible en este dispositivo</p></div><button id="refresh-commerce" class="secondary-button">Actualizar lista</button></div><div id="commerce-list"></div></article><div id="feedback" class="feedback" role="status" aria-live="polite"></div>`;
-    document.querySelector('#add-commerce')?.addEventListener('click', registrarComercio);
-    document.querySelector('#refresh-commerce')?.addEventListener('click', mostrarComercios);
-    await mostrarComercios();
-    return;
-  }
-
-  const descriptions: Record<string, string> = {
-    solicitudes: 'Aquí se administrarán las solicitudes de recolección y su seguimiento.',
-    pesajes: 'Aquí se registrarán y consultarán los pesajes de materiales reciclables.',
-    puntos: 'Aquí se consultarán los saldos y movimientos de puntos de los participantes.'
-  };
-  const symbols: Record<string, string> = { solicitudes: '▤', pesajes: '⚖', puntos: '✧' };
-  content.innerHTML = `<article class="panel coming-panel"><div class="coming-icon">${symbols[view] ?? '♻'}</div><span class="coming-label">MÓDULO EN DESARROLLO</span><h2>${labels[view]}</h2><p>${descriptions[view]}</p><small>La interfaz está preparada como punto de partida. Este módulo se conectará con la API de Rust en las siguientes etapas.</small></article>`;
+  activeView=view;document.querySelectorAll<HTMLButtonElement>('.nav-link').forEach(button=>button.classList.toggle('active',button.dataset.view===view));title.textContent=titles[view]??titles.inicio;
+  if(!sesion.token){renderLogin();return;}
+  try { if(view==='inicio')await renderDashboard();else if(view==='comercios')await showComercios();else if(view==='solicitudes')await showSolicitudes();else if(view==='pesajes')await showPesajes();else if(view==='puntos')await showPuntos();document.querySelector<HTMLElement>('#api-state')!.textContent='Conectada'; }
+  catch(error){report(error);document.querySelector<HTMLElement>('#api-state')!.textContent='Error de conexión';}
 }
 
-function bindQuickActions() {
-  document.querySelector('#quick-add')?.addEventListener('click', registrarComercio);
-  document.querySelector('#quick-list')?.addEventListener('click', () => openView('comercios'));
-}
-
-document.querySelectorAll<HTMLButtonElement>('.nav-link').forEach(button => {
-  button.addEventListener('click', () => openView(button.dataset.view ?? 'inicio'));
-});
-
-bindQuickActions();
-updateStats().catch(error => notify(`Error al consultar PouchDB: ${String(error)}`, true));
+document.querySelectorAll<HTMLButtonElement>('.nav-link').forEach(button=>button.addEventListener('click',()=>openView(button.dataset.view??'inicio')));
+document.querySelector<HTMLButtonElement>('#session-button')!.addEventListener('click',()=>{if(sesion.token){sesion.clear();updateProfile();renderLogin();}else renderLogin();});
+updateProfile();
+if(sesion.token){openView(activeView);}else renderLogin();

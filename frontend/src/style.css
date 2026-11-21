@@ -110,6 +110,17 @@ td code { font-size: 9px; color: #77847b; }
 .feedback { min-height: 18px; margin-top: 12px; font-size: 11px; }
 .feedback.success { color: #21804c; }
 .feedback.error { color: #bd4141; }
+.profile { flex-wrap: wrap; }
+.profile .secondary-button { margin-left: 5px; }
+.form-panel { max-width: 520px; margin: 24px auto; padding: 24px; }
+.editor-panel { position: relative; margin: 0 0 18px; border-color: #b9ddc4; box-shadow: 0 8px 26px rgba(29, 73, 44, .08); }
+.data-form { display: grid; gap: 13px; margin-top: 18px; }
+.data-form label { display: grid; gap: 6px; color: #65736a; font-size: 11px; font-weight: 600; }
+.data-form input, .data-form select { min-height: 39px; width: 100%; border: 1px solid #dce7df; border-radius: 7px; padding: 9px 10px; color: #1d2b24; background: #fff; font: inherit; }
+.data-form input:focus, .data-form select:focus { outline: 2px solid #bce2c9; border-color: var(--green); }
+.data-form .primary-button { justify-self: start; min-width: 130px; }
+.editor-panel .panel-heading { align-items: flex-start; }
+.note { margin-top: 14px; }
 
 @media (max-width: 1000px) {
   .sidebar { width: 215px; flex-basis: 215px; }

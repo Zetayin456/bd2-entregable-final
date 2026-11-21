@@ -53,7 +53,8 @@ services:
   web:
     build: ./frontend
     environment:
-      VITE_API_URL: http://api:8080
+      VITE_API_URL: /
+      VITE_PROXY_TARGET: http://api:8080
     ports: ["5173:5173"]
     volumes:
       - ./frontend:/app
