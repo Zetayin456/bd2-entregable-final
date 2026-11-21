@@ -11,8 +11,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo build --release --locked
 
 COPY src ./src
+# Refresh the copied timestamp so Cargo cannot reuse the cached stub `main` binary.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release --locked
+    touch src/main.rs \
+    && cargo build --release --locked
 
 # Optional CI/local verification target: docker build --target verify ./backend
 FROM builder AS verify

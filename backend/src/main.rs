@@ -9,6 +9,7 @@ use axum::{
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use reqwest::Client;
+use ring::hmac;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -23,6 +24,9 @@ struct App {
     db_password: String,
     secret: String,
     proxy_secret: String,
+}
+fn clean_env_value(value: String) -> String {
+    value.replace('\r', "")
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Claims {
@@ -50,7 +54,14 @@ struct DocInput {
     body: Value,
 }
 fn err(code: StatusCode) -> Response {
-    (code, Json(json!({"error": if code == StatusCode::UNAUTHORIZED {"no_autorizado"} else if code == StatusCode::FORBIDDEN {"prohibido"} else if code == StatusCode::NOT_FOUND {"no_encontrado"} else {"solicitud_invalida"}}))).into_response()
+    let reason = match code {
+        StatusCode::UNAUTHORIZED => "no_autorizado",
+        StatusCode::FORBIDDEN => "prohibido",
+        StatusCode::NOT_FOUND => "no_encontrado",
+        StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE => "servicio_no_disponible",
+        _ => "solicitud_invalida",
+    };
+    (code, Json(json!({"error":reason}))).into_response()
 }
 fn valid_role(role: &str) -> bool {
     matches!(
@@ -175,6 +186,26 @@ fn can_write(c: &Claims, d: &Value) -> bool {
         _ => false,
     }
 }
+fn couch_proxy_token(secret: &str, username: &str) -> String {
+    let key = hmac::Key::new(hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, secret.as_bytes());
+    let signature = hmac::sign(&key, username.as_bytes());
+    let hex = b"0123456789abcdef";
+    let mut token = String::with_capacity(signature.as_ref().len() * 2);
+    for byte in signature.as_ref() {
+        token.push(hex[(byte >> 4) as usize] as char);
+        token.push(hex[(byte & 0x0f) as usize] as char);
+    }
+    token
+}
+fn proxy_request(request: reqwest::RequestBuilder, a: &App, c: &Claims) -> reqwest::RequestBuilder {
+    request
+        .header("X-Auth-CouchDB-UserName", &c.sub)
+        .header("X-Auth-CouchDB-Roles", &c.role)
+        .header(
+            "X-Auth-CouchDB-Token",
+            couch_proxy_token(&a.proxy_secret, &c.sub),
+        )
+}
 fn movement_id(pesaje_id: &str) -> String {
     format!("movimiento_puntos:pesaje:{pesaje_id}")
 }
@@ -263,7 +294,7 @@ async fn ensure_points_for_pesaje(a: &App, pesaje: &Value) -> Result<Value, ()> 
         .get("verificado_en")
         .and_then(Value::as_str)
         .or_else(|| pesaje.get("capturado_en").and_then(Value::as_str))
-        .unwrap_or_else(|| "fecha_no_disponible");
+        .unwrap_or("fecha_no_disponible");
     let movement = json!({"_id":movement_id,"type":"movimiento_puntos","comercio_id":comercio_id,"concepto":"acreditacion","puntos":points,"origen":"pesaje_verificado","pesaje_id":pesaje_id,"regla_version":rules.get("version").cloned().unwrap_or(json!(1)),"creado_en":created_at});
     let write = a
         .http
@@ -354,14 +385,14 @@ async fn get_doc(
     if id.len() > 240 {
         return err(StatusCode::BAD_REQUEST);
     }
-    let r = a
-        .http
-        .get(format!("{}/{}/{}", a.couch, a.db, urlencoding::encode(&id)))
-        .header("X-Auth-CouchDB-User", &c.sub)
-        .header("X-Auth-CouchDB-Roles", &c.role)
-        .header("X-Auth-CouchDB-Token", &a.proxy_secret)
-        .send()
-        .await;
+    let r = proxy_request(
+        a.http
+            .get(format!("{}/{}/{}", a.couch, a.db, urlencoding::encode(&id))),
+        &a,
+        &c,
+    )
+    .send()
+    .await;
     let Ok(r) = r else {
         return err(StatusCode::SERVICE_UNAVAILABLE);
     };
@@ -392,12 +423,7 @@ async fn list_docs(
     if let Some(bookmark) = q.get("bookmark").filter(|v| !v.is_empty()) {
         request["bookmark"] = json!(bookmark);
     }
-    let result = a
-        .http
-        .post(format!("{}/{}/_find", a.couch, a.db))
-        .header("X-Auth-CouchDB-User", &c.sub)
-        .header("X-Auth-CouchDB-Roles", &c.role)
-        .header("X-Auth-CouchDB-Token", &a.proxy_secret)
+    let result = proxy_request(a.http.post(format!("{}/{}/_find", a.couch, a.db)), &a, &c)
         .json(&request)
         .send()
         .await;
@@ -431,13 +457,8 @@ async fn changes(
     if since.len() > 2048 {
         return err(StatusCode::BAD_REQUEST);
     }
-    let result = a
-        .http
-        .get(format!("{}/{}/_changes", a.couch, a.db))
+    let result = proxy_request(a.http.get(format!("{}/{}/_changes", a.couch, a.db)), &a, &c)
         .query(&[("since", since), ("include_docs", "true"), ("limit", "500")])
-        .header("X-Auth-CouchDB-User", &c.sub)
-        .header("X-Auth-CouchDB-Roles", &c.role)
-        .header("X-Auth-CouchDB-Token", &a.proxy_secret)
         .send()
         .await;
     let Ok(result) = result else {
@@ -493,12 +514,7 @@ async fn points_balance(
         if let Some(cursor) = bookmark.as_deref() {
             query["bookmark"] = json!(cursor)
         }
-        let response = a
-            .http
-            .post(format!("{}/{}/_find", a.couch, a.db))
-            .header("X-Auth-CouchDB-User", &c.sub)
-            .header("X-Auth-CouchDB-Roles", &c.role)
-            .header("X-Auth-CouchDB-Token", &a.proxy_secret)
+        let response = proxy_request(a.http.post(format!("{}/{}/_find", a.couch, a.db)), &a, &c)
             .json(&query)
             .send()
             .await;
@@ -572,23 +588,27 @@ fn validate_request_transition(c: &Claims, old: Option<&Value>, next: &Value) ->
             c,
         ));
     }
-    let valid = match (c.role.as_str(), old_state, state) {
-        ("comercio", None, "pendiente") => true,
-        ("comercio", Some("pendiente"), "pendiente" | "cancelada") => true,
-        ("admin_plataforma" | "operador_acopio", None, "pendiente") => true,
-        (
-            "admin_plataforma" | "operador_acopio",
-            Some("pendiente"),
-            "aprobada" | "rechazada" | "cancelada",
-        ) => true,
-        ("admin_plataforma" | "operador_acopio", Some("aprobada"), "asignada" | "cancelada") => {
-            true
-        }
-        ("admin_plataforma" | "operador_acopio", Some("asignada"), "completada" | "cancelada") => {
-            true
-        }
-        _ => false,
-    };
+    let valid = matches!(
+        (c.role.as_str(), old_state, state),
+        ("comercio", None, "pendiente")
+            | ("comercio", Some("pendiente"), "pendiente" | "cancelada")
+            | ("admin_plataforma" | "operador_acopio", None, "pendiente")
+            | (
+                "admin_plataforma" | "operador_acopio",
+                Some("pendiente"),
+                "aprobada" | "rechazada" | "cancelada",
+            )
+            | (
+                "admin_plataforma" | "operador_acopio",
+                Some("aprobada"),
+                "asignada" | "cancelada"
+            )
+            | (
+                "admin_plataforma" | "operador_acopio",
+                Some("asignada"),
+                "completada" | "cancelada"
+            )
+    );
     if !valid {
         return Some(domain_error(
             StatusCode::CONFLICT,
@@ -738,10 +758,11 @@ async fn validate_weighing(
                 "El pesaje debe corresponder al comercio de una solicitud aprobada o asignada.",
             );
         }
-        if request
-            .get("recolector_id")
-            .and_then(Value::as_str)
-            .is_some_and(|id| id != c.sub)
+        if c.role == "recolector"
+            && request
+                .get("recolector_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id != c.sub)
         {
             return reject(
                 StatusCode::FORBIDDEN,
@@ -863,7 +884,11 @@ async fn put_doc(
         );
     }
     d["_id"] = json!(id);
-    let kind = d.get("type").and_then(Value::as_str).unwrap_or("");
+    let kind = d
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     if kind == "movimiento_puntos" || kind == "config_puntos" {
         return domain_error(
             StatusCode::FORBIDDEN,
@@ -872,7 +897,10 @@ async fn put_doc(
             &c,
         );
     }
-    if !matches!(kind, "comercio" | "solicitud_recoleccion" | "pesaje") {
+    if !matches!(
+        kind.as_str(),
+        "comercio" | "solicitud_recoleccion" | "pesaje"
+    ) {
         return domain_error(
             StatusCode::BAD_REQUEST,
             "tipo_no_permitido",
@@ -955,24 +983,22 @@ async fn put_doc(
             Err(_) => {}
         }
     }
-    let write = a
-        .http
-        .put(format!("{}/{}/{}", a.couch, a.db, urlencoding::encode(&id)))
-        .header("X-Auth-CouchDB-User", &c.sub)
-        .header("X-Auth-CouchDB-Roles", &c.role)
-        .header("X-Auth-CouchDB-Token", &a.proxy_secret)
-        .json(&d)
-        .send()
-        .await;
+    let write = proxy_request(
+        a.http
+            .put(format!("{}/{}/{}", a.couch, a.db, urlencoding::encode(&id))),
+        &a,
+        &c,
+    )
+    .json(&d)
+    .send()
+    .await;
     let Ok(write) = write else {
         return err(StatusCode::SERVICE_UNAVAILABLE);
     };
     if write.status().is_success() {
         let saved = write.json::<Value>().await.unwrap_or_default();
-        if verified {
-            if ensure_points_for_pesaje(&a, &d).await.is_err() {
-                return err(StatusCode::SERVICE_UNAVAILABLE);
-            }
+        if verified && ensure_points_for_pesaje(&a, &d).await.is_err() {
+            return err(StatusCode::SERVICE_UNAVAILABLE);
         }
         return (
             StatusCode::CREATED,
@@ -1002,22 +1028,32 @@ async fn put_doc(
     if write.status().as_u16() == StatusCode::CONFLICT.as_u16() {
         return err(StatusCode::CONFLICT);
     }
+    tracing::warn!(
+        status = write.status().as_u16(),
+        role = %c.role,
+        "CouchDB rejected a proxied document write"
+    );
     err(StatusCode::SERVICE_UNAVAILABLE)
 }
 async fn get_doc_for_role(a: &App, c: &Claims, id: &str) -> Result<Option<Value>, ()> {
-    let response = a
-        .http
-        .get(format!("{}/{}/{}", a.couch, a.db, urlencoding::encode(id)))
-        .header("X-Auth-CouchDB-User", &c.sub)
-        .header("X-Auth-CouchDB-Roles", &c.role)
-        .header("X-Auth-CouchDB-Token", &a.proxy_secret)
-        .send()
-        .await
-        .map_err(|_| ())?;
+    let response = proxy_request(
+        a.http
+            .get(format!("{}/{}/{}", a.couch, a.db, urlencoding::encode(id))),
+        a,
+        c,
+    )
+    .send()
+    .await
+    .map_err(|_| ())?;
     if response.status().as_u16() == StatusCode::NOT_FOUND.as_u16() {
         return Ok(None);
     }
     if !response.status().is_success() {
+        tracing::warn!(
+            status = response.status().as_u16(),
+            role = %c.role,
+            "CouchDB rejected a proxied document lookup"
+        );
         return Err(());
     }
     response.json::<Value>().await.map(Some).map_err(|_| ())
@@ -1076,12 +1112,17 @@ async fn create_user(
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt().json().init();
-    let required =
-        |k: &str| env::var(k).unwrap_or_else(|_| panic!("Falta variable requerida: {k}"));
+    let required = |k: &str| {
+        env::var(k)
+            .map(clean_env_value)
+            .unwrap_or_else(|_| panic!("Falta variable requerida: {k}"))
+    };
     let a = Arc::new(App {
         http: Client::new(),
         couch: required("COUCHDB_URL"),
-        db: env::var("COUCHDB_DB").unwrap_or_else(|_| "reciclaje".into()),
+        db: env::var("COUCHDB_DB")
+            .map(clean_env_value)
+            .unwrap_or_else(|_| "reciclaje".into()),
         db_user: required("COUCHDB_USER"),
         db_password: required("COUCHDB_PASSWORD"),
         secret: required("JWT_SECRET"),
@@ -1195,5 +1236,18 @@ mod tests {
         let retry = json!({"_id":"pesaje:1","_rev":"2-b","estado":"verificado","lineas":[{"material":"carton","peso_kg":2.0}],"verificado_en":"2026-01-02T00:00:00Z"});
         assert!(same_verification_event(&original, &retry));
         assert_eq!(movement_id("pesaje:1"), "movimiento_puntos:pesaje:pesaje:1");
+    }
+
+    #[test]
+    fn token_proxy_couchdb_es_hmac_sha1_del_usuario() {
+        assert_eq!(
+            couch_proxy_token("test_secret", "alice"),
+            "3a1e2c1baa0b3ea3972be821d982142e4a7047de"
+        );
+    }
+
+    #[test]
+    fn normaliza_carriage_return_en_variables_de_entorno() {
+        assert_eq!(clean_env_value("proxy-secret\r".into()), "proxy-secret");
     }
 }

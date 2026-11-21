@@ -98,7 +98,7 @@ const pendingWeighing = {
   estado: 'pendiente_verificacion', capturado_en: new Date().toISOString(),
 };
 result = await save(collector, pendingWeighing, 409);
-assert.equal(result.data.error, 'solicitud_no_aprobada');
+assert.equal(result.error, 'solicitud_no_aprobada');
 
 result = await save(operator, { ...request, estado: 'aprobada' });
 request = { ...request, _rev: result.rev, estado: 'aprobada' };
@@ -106,11 +106,12 @@ result = await save(operator, { ...request, estado: 'asignada', recolector_id: c
 request = { ...request, _rev: result.rev, estado: 'asignada', recolector_id: collectorName };
 
 const badTransition = await save(commerce, { ...request, estado: 'completada' }, 409);
-assert.equal(badTransition.data.error, 'transicion_estado_invalida');
+assert.equal(badTransition.error, 'transicion_estado_invalida');
 
 const weighing = {
   _id: `pesaje:e2e-${suffix}`, type: 'pesaje', comercio_id: commerceId,
-  solicitud_id: requestId, lineas: [{ material: 'carton', peso_kg: 10 }],
+  solicitud_id: requestId, recolector_id: collectorName,
+  lineas: [{ material: 'carton', peso_kg: 10 }],
   estado: 'pendiente_verificacion', capturado_en: new Date().toISOString(),
 };
 result = await save(collector, weighing);
@@ -118,27 +119,27 @@ const weighingRev = result.rev;
 
 let duplicate = { ...weighing, _id: `pesaje:e2e-duplicado-${suffix}` };
 result = await save(collector, duplicate, 409);
-assert.equal(result.data.error, 'pesaje_duplicado');
+assert.equal(result.error, 'pesaje_duplicado');
 
 let invalid = { ...weighing, _id: `pesaje:e2e-material-${suffix}`, solicitud_id: undefined, lineas: [{ material: 'organico', peso_kg: 1 }] };
 result = await save(collector, invalid, 400);
-assert.equal(result.data.error, 'material_no_permitido');
+assert.equal(result.error, 'material_no_permitido');
 invalid = { ...weighing, _id: `pesaje:e2e-peso-${suffix}`, solicitud_id: undefined, lineas: [{ material: 'carton', peso_kg: 1000.01 }] };
 result = await save(collector, invalid, 400);
-assert.equal(result.data.error, 'peso_fuera_rango');
+assert.equal(result.error, 'peso_fuera_rango');
 
 const commerceCannotVerify = await save(commerce, { ...weighing, _rev: weighingRev, estado: 'verificado' }, 403);
-assert.equal(commerceCannotVerify.data.error, 'permiso_insuficiente');
+assert.equal(commerceCannotVerify.error, 'permiso_insuficiente');
 
 const alteredVerification = { ...weighing, _rev: weighingRev, estado: 'verificado', lineas: [{ material: 'carton', peso_kg: 99 }] };
 result = await save(operator, alteredVerification, 409);
-assert.equal(result.data.error, 'datos_pesaje_alterados');
+assert.equal(result.error, 'datos_pesaje_alterados');
 
 const verification = { ...weighing, _rev: weighingRev, estado: 'verificado', verificado_en: new Date().toISOString() };
 result = await save(operator, verification);
 const verifiedRev = result.rev;
 result = await save(operator, { ...verification, _rev: verifiedRev }, 200);
-assert.equal(result.data.points_awarded, true);
+assert.equal(result.points_awarded, true);
 
 const balance = await call(`/api/points/balance?comercio_id=${encodeURIComponent(commerceId)}`, { token: commerce });
 expectStatus(balance, 200, 'saldo de puntos propio');
@@ -156,7 +157,7 @@ result = await save(collector, {
   _id: `pesaje:e2e-rafaga-9-${suffix}`, type: 'pesaje', comercio_id: commerceId,
   lineas: [{ material: 'papel', peso_kg: 1 }], estado: 'pendiente_verificacion', capturado_en: burstTime,
 }, 429);
-assert.equal(result.data.error, 'frecuencia_sospechosa');
+assert.equal(result.error, 'frecuencia_sospechosa');
 
 console.log('PASS: autenticación, RBAC/alcance, API y cambios incrementales, transiciones, validaciones, antifraude, verificación e idempotencia de puntos.');
 

@@ -112,6 +112,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
