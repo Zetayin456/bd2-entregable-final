@@ -13,6 +13,9 @@ curl -fsS $auth -X PUT "$COUCHDB_URL/reciclaje" || true
 curl -fsS $auth -X PUT "$COUCHDB_URL/reciclaje/_security" \
 -H 'Content-Type: application/json' \
 --data '{"admins":{"names":[],"roles":["admin_plataforma"]},"members":{"names":[],"roles":["operador_acopio","recolector","comercio"]}}'
+curl -fsS $auth -X PUT "$COUCHDB_URL/reciclaje/config:puntos" \
+-H 'Content-Type: application/json' \
+--data '{"_id":"config:puntos","type":"config_puntos","version":1,"puntos_por_kg":{"carton":5,"papel":4,"plastico":10,"vidrio":3,"metal":12,"aluminio":15}}' || true
 curl -fsS $auth -X PUT "$COUCHDB_URL/_users/org.couchdb.user:$BOOTSTRAP_ADMIN_USER" \
 -H 'Content-Type: application/json' \
 --data "{\"name\":\"$BOOTSTRAP_ADMIN_USER\",\"roles\":[\"admin_plataforma\"],\"type\":\"user\",\"password\":\"$BOOTSTRAP_ADMIN_PASSWORD\"}" || true

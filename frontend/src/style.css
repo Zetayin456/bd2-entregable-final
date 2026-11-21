@@ -129,6 +129,15 @@ td code { font-size: 9px; color: #77847b; }
 .conflict-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; border-top: 1px solid var(--line); padding: 12px 0; font-size: 11px; }
 .conflict-row code { color: #59675e; }
 .conflict-row span { flex: 1; color: #8e6821; }
+.balance-card { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 18px 0 23px; padding: 18px; border: 1px solid #dceee1; border-radius: 11px; background: #f7fbf8; }
+.balance-card > div { min-width: 180px; flex: 1; }
+.balance-card span, .balance-card strong { display: block; }
+.balance-card span { color: var(--muted); font-size: 11px; }
+.balance-card strong { margin-top: 5px; color: var(--green-dark); font: 800 24px 'Manrope', sans-serif; }
+.balance-card .note { flex-basis: 100%; margin: 0; }
+.balance-form { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; }
+.balance-form label { display: grid; gap: 5px; color: #65736a; font-size: 10px; }
+.balance-form input { min-height: 35px; border: 1px solid #dce7df; border-radius: 7px; padding: 7px; }
 @keyframes sync-pulse { to { opacity: .35; } }
 
 @media (max-width: 1000px) {

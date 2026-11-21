@@ -1,4 +1,4 @@
-import type { ChangesResponse, Documento, LoginResponse, Rol, SaveResponse, SyncPage, TipoDocumento } from '../domain/tipos';
+import type { ChangesResponse, Documento, LoginResponse, Rol, SaldoPuntos, SaveResponse, SyncPage, TipoDocumento } from '../domain/tipos';
 
 const baseUrl = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 const tokenKey = 'reciclaje.jwt';
@@ -47,6 +47,10 @@ export const api = {
   },
   changes(since: string) {
     return request<ChangesResponse>(`/api/changes?since=${encodeURIComponent(since)}`);
+  },
+  saldoPuntos(comercioId?: string) {
+    const query = comercioId ? `?comercio_id=${encodeURIComponent(comercioId)}` : '';
+    return request<SaldoPuntos>(`/api/points/balance${query}`);
   },
   save<T extends Documento>(doc: T) {
     return request<SaveResponse>(`/api/docs/${encodeURIComponent(doc._id)}`, { method: 'PUT', body: JSON.stringify(doc) });

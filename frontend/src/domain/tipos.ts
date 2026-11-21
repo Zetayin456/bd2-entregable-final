@@ -28,6 +28,7 @@ export interface Pesaje extends DocumentoBase {
 export interface MovimientoPuntos extends DocumentoBase {
   type: 'movimiento_puntos'; comercio_id: string; origen?: string;
   puntos: number; concepto: 'acreditacion' | 'canje'; creado_en?: string;
+  pesaje_id?: string; regla_version?: number;
 }
 
 export type Documento = Comercio | SolicitudRecoleccion | Pesaje | MovimientoPuntos;
@@ -36,3 +37,4 @@ export interface DocumentsResponse<T extends Documento = Documento> { docs: T[] 
 export interface SyncPage<T extends Documento = Documento> { docs: T[]; bookmark?: string | null; has_more?: boolean }
 export interface SaveResponse { ok: boolean; rev: string }
 export interface ChangesResponse { results: Array<{ seq: unknown; id: string; doc?: Documento & { _deleted?: boolean } }>; last_seq: unknown; has_more: boolean }
+export interface SaldoPuntos { comercio_id: string; saldo: number; movimientos: MovimientoPuntos[] }
