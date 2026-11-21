@@ -31,5 +31,8 @@ export interface MovimientoPuntos extends DocumentoBase {
 }
 
 export type Documento = Comercio | SolicitudRecoleccion | Pesaje | MovimientoPuntos;
-export interface LoginResponse { token: string; role: Rol; comercio_id?: string | null; expires_in: number }
+export interface LoginResponse { token: string; username: string; role: Rol; comercio_id?: string | null; expires_in: number }
 export interface DocumentsResponse<T extends Documento = Documento> { docs: T[] }
+export interface SyncPage<T extends Documento = Documento> { docs: T[]; bookmark?: string | null; has_more?: boolean }
+export interface SaveResponse { ok: boolean; rev: string }
+export interface ChangesResponse { results: Array<{ seq: unknown; id: string; doc?: Documento & { _deleted?: boolean } }>; last_seq: unknown; has_more: boolean }

@@ -121,6 +121,15 @@ td code { font-size: 9px; color: #77847b; }
 .data-form .primary-button { justify-self: start; min-width: 130px; }
 .editor-panel .panel-heading { align-items: flex-start; }
 .note { margin-top: 14px; }
+#sync-indicator[data-state="offline"] i, #sync-indicator[data-state="error"] i { background: #d65353; }
+#sync-indicator[data-state="pending"] i { background: #d99a27; }
+#sync-indicator[data-state="syncing"] i { background: #438bd0; animation: sync-pulse 1s infinite alternate; }
+#sync-button:disabled { opacity: .65; cursor: wait; }
+.conflict-panel { margin-top: 18px; border-color: #edcf99; }
+.conflict-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; border-top: 1px solid var(--line); padding: 12px 0; font-size: 11px; }
+.conflict-row code { color: #59675e; }
+.conflict-row span { flex: 1; color: #8e6821; }
+@keyframes sync-pulse { to { opacity: .35; } }
 
 @media (max-width: 1000px) {
   .sidebar { width: 215px; flex-basis: 215px; }

@@ -24,7 +24,7 @@ async fn login(State(a):State<Arc<App>>, Json(input):Json<Login>) -> Response {
  if !valid_role(role) {return err(StatusCode::UNAUTHORIZED)}
  let comercio_id=v.get("comercio_id").and_then(Value::as_str).map(str::to_owned);
  let claims=Claims{sub:input.username,role:role.to_owned(),comercio_id,exp:(Utc::now()+Duration::hours(8)).timestamp() as usize};
- match encode(&Header::default(),&claims,&EncodingKey::from_secret(a.secret.as_bytes())) {Ok(token)=>(StatusCode::OK,Json(json!({"token":token,"role":claims.role,"comercio_id":claims.comercio_id,"expires_in":28800}))).into_response(),Err(_)=>err(StatusCode::INTERNAL_SERVER_ERROR)}
+ match encode(&Header::default(),&claims,&EncodingKey::from_secret(a.secret.as_bytes())) {Ok(token)=>(StatusCode::OK,Json(json!({"token":token,"username":claims.sub,"role":claims.role,"comercio_id":claims.comercio_id,"expires_in":28800}))).into_response(),Err(_)=>err(StatusCode::INTERNAL_SERVER_ERROR)}
 }
 async fn auth(State(a):State<Arc<App>>, mut req:axum::http::Request<axum::body::Body>, next:Next)->Response{
  let token=req.headers().get(header::AUTHORIZATION).and_then(|h|h.to_str().ok()).and_then(|v|v.strip_prefix("Bearer "));
@@ -38,17 +38,33 @@ async fn get_doc(State(a):State<Arc<App>>, axum::Extension(c):axum::Extension<Cl
 async fn list_docs(State(a):State<Arc<App>>,axum::Extension(c):axum::Extension<Claims>,Query(q):Query<HashMap<String,String>>)->Response {
  let kind=q.get("type").map(String::as_str).unwrap_or("");
  if !matches!(kind,"comercio"|"solicitud_recoleccion"|"pesaje"|"movimiento_puntos") { return err(StatusCode::BAD_REQUEST); }
- let request=json!({"selector":{"type":kind},"limit":500,"fields":["_id","_rev","type","nombre","giro","zona","activo","creado_en","estado","solicitud_id","comercio_id","recolector_id","lineas","capturado_en","verificado_en","puntos","origen","concepto","creado_en"]});
+ let mut request=json!({"selector":{"type":kind},"limit":500,"fields":["_id","_rev","type","nombre","giro","zona","activo","creado_en","estado","solicitud_id","comercio_id","recolector_id","lineas","capturado_en","verificado_en","puntos","origen","concepto","fecha_solicitada","observaciones","creada_en"]});
+ if let Some(bookmark)=q.get("bookmark").filter(|v|!v.is_empty()){request["bookmark"]=json!(bookmark);}
  let result=a.http.post(format!("{}/{}/_find",a.couch,a.db)).header("X-Auth-CouchDB-User",&c.sub).header("X-Auth-CouchDB-Roles",&c.role).header("X-Auth-CouchDB-Token",&a.proxy_secret).json(&request).send().await;
  let Ok(result)=result else{return err(StatusCode::SERVICE_UNAVAILABLE)};
+ if !result.status().is_success(){return err(StatusCode::BAD_GATEWAY);}
  let Ok(value)=result.json::<Value>().await else{return err(StatusCode::BAD_GATEWAY)};
- let docs=value.get("docs").and_then(Value::as_array).cloned().unwrap_or_default().into_iter().filter(|d|can_read(&c,d)).collect::<Vec<_>>();
- Json(json!({"docs":docs})).into_response()
+ let page_docs=value.get("docs").and_then(Value::as_array).cloned().unwrap_or_default();
+ let has_more=page_docs.len()==500;
+ let docs=page_docs.into_iter().filter(|d|can_read(&c,d)).collect::<Vec<_>>();
+ Json(json!({"docs":docs,"bookmark":value.get("bookmark"),"has_more":has_more})).into_response()
+}
+async fn changes(State(a):State<Arc<App>>,axum::Extension(c):axum::Extension<Claims>,Query(q):Query<HashMap<String,String>>)->Response {
+ let since=q.get("since").map(String::as_str).unwrap_or("0");
+ if since.len()>2048{return err(StatusCode::BAD_REQUEST)}
+ let result=a.http.get(format!("{}/{}/_changes",a.couch,a.db)).query(&[("since",since),("include_docs","true"),("limit","500")]).header("X-Auth-CouchDB-User",&c.sub).header("X-Auth-CouchDB-Roles",&c.role).header("X-Auth-CouchDB-Token",&a.proxy_secret).send().await;
+ let Ok(result)=result else{return err(StatusCode::SERVICE_UNAVAILABLE)};
+ if !result.status().is_success(){return err(StatusCode::BAD_GATEWAY)}
+ let Ok(value)=result.json::<Value>().await else{return err(StatusCode::BAD_GATEWAY)};
+ let rows=value.get("results").and_then(Value::as_array).cloned().unwrap_or_default();
+ let has_more=rows.len()==500;
+ let results=rows.into_iter().filter(|row|row.get("doc").is_some_and(|doc|can_read(&c,doc))).collect::<Vec<_>>();
+ Json(json!({"results":results,"last_seq":value.get("last_seq"),"has_more":has_more})).into_response()
 }
 async fn put_doc(State(a):State<Arc<App>>,axum::Extension(c):axum::Extension<Claims>,Path(id):Path<String>,Json(input):Json<DocInput>)->Response{if id.len()>240||input.body.as_object().is_none(){return err(StatusCode::BAD_REQUEST)}let mut d=input.body;if d.get("_id").and_then(Value::as_str).is_some_and(|x|x!=id){return err(StatusCode::BAD_REQUEST)} d["_id"]=json!(id); if c.role=="recolector" {d["recolector_id"]=json!(c.sub); d["estado"]=json!("pendiente_verificacion");}
 
-    if !can_write(&c,&d){return err(StatusCode::FORBIDDEN)} let r=a.http.put(format!("{}/{}/{}",a.couch,a.db,urlencoding::encode(&id))).header("X-Auth-CouchDB-User",&c.sub).header("X-Auth-CouchDB-Roles",&c.role).header("X-Auth-CouchDB-Token",&a.proxy_secret).json(&d).send().await;match r{Ok(r) if r.status().is_success()=>(StatusCode::CREATED,Json(json!({"ok":true}))).into_response(),Ok(r) if r.status().as_u16()==StatusCode::CONFLICT.as_u16()=>err(StatusCode::CONFLICT),_=>err(StatusCode::SERVICE_UNAVAILABLE)} }
+    if !can_write(&c,&d){return err(StatusCode::FORBIDDEN)} let r=a.http.put(format!("{}/{}/{}",a.couch,a.db,urlencoding::encode(&id))).header("X-Auth-CouchDB-User",&c.sub).header("X-Auth-CouchDB-Roles",&c.role).header("X-Auth-CouchDB-Token",&a.proxy_secret).json(&d).send().await;match r{Ok(r) if r.status().is_success()=>{let saved=r.json::<Value>().await.unwrap_or_default();(StatusCode::CREATED,Json(json!({"ok":true,"rev":saved.get("rev")}))).into_response()},Ok(r) if r.status().as_u16()==StatusCode::CONFLICT.as_u16()=>err(StatusCode::CONFLICT),_=>err(StatusCode::SERVICE_UNAVAILABLE)} }
 async fn create_user(State(a):State<Arc<App>>,axum::Extension(c):axum::Extension<Claims>,Json(u):Json<NewUser>)->Response{if c.role!="admin_plataforma"{return err(StatusCode::FORBIDDEN)}
 
     if u.username.len()<3||u.username.len()>80||u.password.len()<12||u.password.len()>256||!valid_role(&u.role)||(u.role=="comercio"&&u.comercio_id.is_none()){return err(StatusCode::BAD_REQUEST)}let v=json!({"name":u.username,"roles":[u.role],"type":"user","password":u.password,"comercio_id":u.comercio_id});let r=a.http.put(format!("{}/_users/org.couchdb.user:{}",a.couch,urlencoding::encode(&u.username))).basic_auth(&a.db_user,Some(&a.db_password)).json(&v).send().await;match r{Ok(r) if r.status().is_success()=>(StatusCode::CREATED,Json(json!({"ok":true}))).into_response(),Ok(r) if r.status().as_u16()==StatusCode::CONFLICT.as_u16()=>err(StatusCode::CONFLICT),_=>err(StatusCode::SERVICE_UNAVAILABLE)} }
-#[tokio::main] async fn main(){tracing_subscriber::fmt().json().init();let required=|k:&str|env::var(k).unwrap_or_else(|_|panic!("Falta variable requerida: {k}"));let a=Arc::new(App{http:Client::new(),couch:required("COUCHDB_URL"),db:env::var("COUCHDB_DB").unwrap_or_else(|_|"reciclaje".into()),db_user:required("COUCHDB_USER"),db_password:required("COUCHDB_PASSWORD"),secret:required("JWT_SECRET"),proxy_secret:required("COUCHDB_PROXY_SECRET")});assert!(a.secret.len()>=32&&a.proxy_secret.len()>=32,"JWT_SECRET y COUCHDB_PROXY_SECRET deben tener al menos 32 caracteres");let protected: Router<Arc<App>>=Router::new().route("/api/users",post(create_user)).route("/api/docs",get(list_docs)).route("/api/docs/:id",get(get_doc).put(put_doc)).layer(middleware::from_fn_with_state(a.clone(),auth));let app: Router<Arc<App>>=Router::new().route("/salud",get(||async{"ok"})).route("/auth/login",post(login)).merge(protected);let app: Router=app.with_state(a.clone());let l=tokio::net::TcpListener::bind("0.0.0.0:8080").await.expect("No se pudo enlazar puerto");axum::serve(l,app).await.expect("Error HTTP");}
+#[tokio::main] async fn main(){tracing_subscriber::fmt().json().init();let required=|k:&str|env::var(k).unwrap_or_else(|_|panic!("Falta variable requerida: {k}"));let a=Arc::new(App{http:Client::new(),couch:required("COUCHDB_URL"),db:env::var("COUCHDB_DB").unwrap_or_else(|_|"reciclaje".into()),db_user:required("COUCHDB_USER"),db_password:required("COUCHDB_PASSWORD"),secret:required("JWT_SECRET"),proxy_secret:required("COUCHDB_PROXY_SECRET")});assert!(a.secret.len()>=32&&a.proxy_secret.len()>=32,"JWT_SECRET y COUCHDB_PROXY_SECRET deben tener al menos 32 caracteres");let protected: Router<Arc<App>>=Router::new().route("/api/users",post(create_user)).route("/api/changes",get(changes)).route("/api/docs",get(list_docs)).route("/api/docs/:id",get(get_doc).put(put_doc)).layer(middleware::from_fn_with_state(a.clone(),auth));let app: Router<Arc<App>>=Router::new().route("/salud",get(||async{"ok"})).route("/auth/login",post(login)).merge(protected);let app: Router=app.with_state(a.clone());let l=tokio::net::TcpListener::bind("0.0.0.0:8080").await.expect("No se pudo enlazar puerto");axum::serve(l,app).await.expect("Error HTTP");}
