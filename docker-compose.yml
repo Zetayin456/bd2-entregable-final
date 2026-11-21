@@ -7,12 +7,15 @@ x-limites: &limites
 services:
   couchdb:
     image: couchdb:3.3
+    env_file: .env
+    entrypoint: ["/bin/sh", "-c", "export HOME=/opt/couchdb; exec setpriv --reuid=couchdb --regid=couchdb --clear-groups /opt/couchdb/bin/couchdb"]
     <<: *limites
     environment:
-      COUCHDB_USER: 
-      COUCHDB_PASSWORD: 
+      COUCHDB_USER: ${COUCHDB_USER:?Define COUCHDB_USER en .env}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?Define COUCHDB_PASSWORD en .env}
     volumes:
       - couchdb_data:/opt/couchdb/data
+      - ./couchdb/lab.ini:/opt/couchdb/etc/local.d/10-security.ini:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:5984/_up"]
       interval: 5s
@@ -27,6 +30,8 @@ services:
     volumes: ["./couchdb/init.sh:/init.sh:ro"]
     entrypoint: ["/bin/sh", "/init.sh"]
     env_file: .env
+    environment:
+      COUCHDB_URL: http://couchdb:5984
     networks: [backend_net]
 
   api:
@@ -34,9 +39,11 @@ services:
     <<: *limites
     environment:
       COUCHDB_URL: http://couchdb:5984
-      COUCHDB_USER: 
-      COUCHDB_PASSWORD: 
-      JWT_SECRET: 
+      COUCHDB_USER: ${COUCHDB_USER:?Define COUCHDB_USER en .env}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?Define COUCHDB_PASSWORD en .env}
+      COUCHDB_PROXY_SECRET: ${COUCHDB_PROXY_SECRET:?Define COUCHDB_PROXY_SECRET en .env}
+      COUCHDB_DB: reciclaje
+      JWT_SECRET: ${JWT_SECRET:?Define JWT_SECRET en .env}
       RUST_LOG: info
     depends_on:
       couchdb-init: { condition: service_completed_successfully }

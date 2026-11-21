@@ -1,4 +1,4 @@
-﻿#!/bin/sh
+#!/bin/sh
 IF=eth0
 case "$NETEM_PROFILE" in
   ideal) tc qdisc replace dev $IF root netem delay 20ms;;
