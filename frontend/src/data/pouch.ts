@@ -57,7 +57,7 @@ export async function listarDocumentos<T extends Documento>(type?: TipoDocumento
 
 export async function guardarLocal<T extends Documento>(document: T): Promise<void> {
   const previous = await db.get(document._id).catch(() => undefined);
-  const next = { ...previous, ...document, ...(previous?._rev ? { _rev: previous._rev } : {}), remote_rev: previous?.remote_rev ?? ('remote_rev' in document ? document.remote_rev as string | undefined : undefined), sync_status: 'pending' as const, local_modified_at: new Date().toISOString() } as DocumentoLocal;
+  const next = { ...previous, ...document, ...(previous?._rev ? { _rev: previous._rev } : {}), remote_rev: previous?.remote_rev ?? ('remote_rev' in document ? document.remote_rev as string | undefined : undefined), sync_status: 'pending' as const, sync_error: undefined, local_modified_at: new Date().toISOString() } as DocumentoLocal;
   await db.put(next);
   await refreshCounts();
 }
@@ -81,6 +81,10 @@ async function putRemote(local: DocumentoLocal): Promise<void> {
         await db.put(defined({ ...current, sync_status: 'conflict' as const, sync_error: 'El servidor contiene una revisión distinta.', conflict_remote: latest }));
       }
       return;
+    }
+    if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+      const current = await db.get(local._id).catch(() => undefined);
+      if (current) await db.put(defined({ ...current, sync_error: error.message }));
     }
     throw error;
   }

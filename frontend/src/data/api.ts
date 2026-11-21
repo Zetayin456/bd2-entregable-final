@@ -7,7 +7,7 @@ const commerceKey = 'reciclaje.comercio';
 const userKey = 'reciclaje.user';
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) { super(message); this.name = 'ApiError'; }
+  constructor(message: string, readonly status: number, readonly code?: string) { super(message); this.name = 'ApiError'; }
 }
 
 export const sesion = {
@@ -28,7 +28,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   catch { throw new ApiError('No se pudo conectar con el servidor. Revisa que la API esté disponible.', 0); }
   if (!response.ok) {
     const messages: Record<number, string> = { 400: 'Revisa los datos enviados.', 401: 'Inicia sesión para continuar.', 403: 'Tu rol no tiene permiso para esta acción.', 404: 'No se encontró el registro.', 409: 'El registro cambió; actualiza la lista y vuelve a intentar.', 503: 'El servidor de datos no está disponible.' };
-    throw new ApiError(messages[response.status] ?? 'La solicitud no pudo completarse.', response.status);
+    const payload = await response.json().catch(() => ({})) as { message?: unknown; error?: unknown };
+    const message = typeof payload.message === 'string' ? payload.message : messages[response.status] ?? 'La solicitud no pudo completarse.';
+    throw new ApiError(message, response.status, typeof payload.error === 'string' ? payload.error : undefined);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

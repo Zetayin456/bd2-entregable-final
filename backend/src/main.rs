@@ -159,6 +159,7 @@ fn can_write(c: &Claims, d: &Value) -> bool {
         "operador_acopio" => {
             typ == "comercio"
                 || typ == "pesaje" && d.get("estado").and_then(Value::as_str) == Some("verificado")
+                || typ == "solicitud_recoleccion"
         }
         "recolector" => {
             typ == "pesaje"
@@ -200,6 +201,9 @@ async fn calculate_points(a: &App, pesaje: &Value) -> Result<(i64, Value), ()> {
         .and_then(Value::as_array)
         .filter(|v| !v.is_empty())
         .ok_or(())?;
+    if lines.len() > 10 {
+        return Err(());
+    }
     let mut total = 0.0_f64;
     for line in lines {
         let material = line
@@ -211,7 +215,7 @@ async fn calculate_points(a: &App, pesaje: &Value) -> Result<(i64, Value), ()> {
         let weight = line
             .get("peso_kg")
             .and_then(Value::as_f64)
-            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 100_000.0)
+            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1_000.0)
             .ok_or(())?;
         let rate = rates
             .get(&material)
@@ -220,7 +224,7 @@ async fn calculate_points(a: &App, pesaje: &Value) -> Result<(i64, Value), ()> {
             .ok_or(())?;
         total += weight * rate;
     }
-    if !total.is_finite() || total > i64::MAX as f64 {
+    if !total.is_finite() || total > 2_000.0 || total > i64::MAX as f64 {
         return Err(());
     }
     let points = total.round() as i64;
@@ -535,26 +539,331 @@ async fn points_balance(
     };
     Json(json!({"comercio_id":comercio_id,"saldo":balance,"movimientos":movements})).into_response()
 }
+fn domain_error(
+    code: StatusCode,
+    reason: &'static str,
+    message: &'static str,
+    c: &Claims,
+) -> Response {
+    tracing::warn!(reason, status = code.as_u16(), role = %c.role, "Business rule rejected request");
+    (code, Json(json!({"error":reason,"message":message}))).into_response()
+}
+fn validate_request_transition(c: &Claims, old: Option<&Value>, next: &Value) -> Option<Response> {
+    let state = next.get("estado").and_then(Value::as_str).unwrap_or("");
+    let old_state = old.and_then(|v| v.get("estado")).and_then(Value::as_str);
+    let commerce = next
+        .get("comercio_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if commerce.is_empty()
+        || commerce.len() > 200
+        || next
+            .get("observaciones")
+            .and_then(Value::as_str)
+            .is_some_and(|v| v.len() > 1000)
+    {
+        return Some(domain_error(
+            StatusCode::BAD_REQUEST,
+            "solicitud_invalida",
+            "Indica un comercio válido y observaciones de hasta 1,000 caracteres.",
+            c,
+        ));
+    }
+    let valid = match (c.role.as_str(), old_state, state) {
+        ("comercio", None, "pendiente") => true,
+        ("comercio", Some("pendiente"), "pendiente" | "cancelada") => true,
+        ("admin_plataforma" | "operador_acopio", None, "pendiente") => true,
+        (
+            "admin_plataforma" | "operador_acopio",
+            Some("pendiente"),
+            "aprobada" | "rechazada" | "cancelada",
+        ) => true,
+        ("admin_plataforma" | "operador_acopio", Some("aprobada"), "asignada" | "cancelada") => {
+            true
+        }
+        ("admin_plataforma" | "operador_acopio", Some("asignada"), "completada" | "cancelada") => {
+            true
+        }
+        _ => false,
+    };
+    if !valid {
+        return Some(domain_error(
+            StatusCode::CONFLICT,
+            "transicion_estado_invalida",
+            "La solicitud no puede pasar de su estado actual al estado indicado.",
+            c,
+        ));
+    }
+    if old.is_some_and(|v| v.get("comercio_id").and_then(Value::as_str) != Some(commerce)) {
+        return Some(domain_error(
+            StatusCode::CONFLICT,
+            "comercio_no_coincide",
+            "El comercio de una solicitud existente no se puede cambiar.",
+            c,
+        ));
+    }
+    None
+}
+async fn validate_weighing(
+    a: &App,
+    c: &Claims,
+    old: Option<&Value>,
+    d: &Value,
+) -> Option<Response> {
+    let reject = |code, reason, message| Some(domain_error(code, reason, message, c));
+    let state = d.get("estado").and_then(Value::as_str).unwrap_or("");
+    if !matches!(state, "pendiente_verificacion" | "verificado") {
+        return reject(
+            StatusCode::BAD_REQUEST,
+            "estado_pesaje_invalido",
+            "El estado del pesaje no es válido.",
+        );
+    }
+    let commerce = d.get("comercio_id").and_then(Value::as_str).unwrap_or("");
+    if commerce.is_empty()
+        || commerce.len() > 200
+        || old.is_some_and(|v| v.get("comercio_id").and_then(Value::as_str) != Some(commerce))
+    {
+        return reject(
+            StatusCode::BAD_REQUEST,
+            "comercio_no_coincide",
+            "El pesaje debe conservar un identificador de comercio válido.",
+        );
+    }
+    let Some(lines) = d
+        .get("lineas")
+        .and_then(Value::as_array)
+        .filter(|v| !v.is_empty() && v.len() <= 10)
+    else {
+        return reject(
+            StatusCode::BAD_REQUEST,
+            "lineas_pesaje_invalidas",
+            "El pesaje requiere entre 1 y 10 líneas de material.",
+        );
+    };
+    let mut total = 0.0_f64;
+    for line in lines {
+        let material = line
+            .get("material")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        let weight = line
+            .get("peso_kg")
+            .and_then(Value::as_f64)
+            .unwrap_or(f64::NAN);
+        if !matches!(
+            material.as_str(),
+            "carton" | "papel" | "plastico" | "vidrio" | "metal" | "aluminio"
+        ) {
+            return reject(
+                StatusCode::BAD_REQUEST,
+                "material_no_permitido",
+                "El material no está habilitado para recibir puntos.",
+            );
+        }
+        if !weight.is_finite() || !(0.01..=1_000.0).contains(&weight) {
+            return reject(
+                StatusCode::BAD_REQUEST,
+                "peso_fuera_rango",
+                "Cada línea debe tener un peso entre 0.01 y 1,000 kg.",
+            );
+        }
+        total += weight;
+    }
+    if total > 2_000.0 {
+        return reject(
+            StatusCode::BAD_REQUEST,
+            "peso_total_fuera_rango",
+            "El peso total de un pesaje no puede superar 2,000 kg.",
+        );
+    }
+    let captured = d
+        .get("capturado_en")
+        .and_then(Value::as_str)
+        .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok());
+    let Some(captured) = captured else {
+        return reject(
+            StatusCode::BAD_REQUEST,
+            "fecha_pesaje_invalida",
+            "La fecha de captura debe ser una fecha ISO válida.",
+        );
+    };
+    let now = Utc::now();
+    if captured > now + Duration::minutes(5) || captured < now - Duration::days(30) {
+        return reject(
+            StatusCode::BAD_REQUEST,
+            "fecha_pesaje_fuera_rango",
+            "La fecha de captura debe estar dentro de los últimos 30 días y no en el futuro.",
+        );
+    }
+    if let Some(request_id) = d.get("solicitud_id").and_then(Value::as_str) {
+        let request = match couch_get(a, request_id).await {
+            Ok(response) if response.status().is_success() => response.json::<Value>().await.ok(),
+            _ => None,
+        };
+        let Some(request) = request else {
+            return reject(
+                StatusCode::BAD_REQUEST,
+                "solicitud_no_valida",
+                "La solicitud asociada no existe o no está disponible.",
+            );
+        };
+        if request.get("type").and_then(Value::as_str) != Some("solicitud_recoleccion")
+            || request.get("comercio_id").and_then(Value::as_str) != Some(commerce)
+            || !matches!(
+                request.get("estado").and_then(Value::as_str),
+                Some("aprobada" | "asignada")
+            )
+        {
+            return reject(
+                StatusCode::CONFLICT,
+                "solicitud_no_aprobada",
+                "El pesaje debe corresponder al comercio de una solicitud aprobada o asignada.",
+            );
+        }
+        if request
+            .get("recolector_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| id != c.sub)
+        {
+            return reject(
+                StatusCode::FORBIDDEN,
+                "recolector_no_asignado",
+                "La solicitud está asignada a otro recolector.",
+            );
+        }
+    }
+    if state == "verificado"
+        && old.and_then(|v| v.get("estado")).and_then(Value::as_str)
+            != Some("pendiente_verificacion")
+    {
+        return reject(
+            StatusCode::CONFLICT,
+            "flujo_verificacion_invalido",
+            "Solo se pueden verificar pesajes pendientes.",
+        );
+    }
+    if state == "verificado"
+        && old.is_some_and(|v| {
+            [
+                "comercio_id",
+                "recolector_id",
+                "solicitud_id",
+                "capturado_en",
+                "lineas",
+            ]
+            .iter()
+            .any(|key| v.get(*key) != d.get(*key))
+        })
+    {
+        return reject(
+            StatusCode::CONFLICT,
+            "datos_pesaje_alterados",
+            "La verificación debe conservar los datos originales de captura.",
+        );
+    }
+    if old.is_none()
+        || old.and_then(|v| v.get("estado")).and_then(Value::as_str)
+            == Some("pendiente_verificacion")
+    {
+        let selector = if let Some(request_id) = d.get("solicitud_id").and_then(Value::as_str) {
+            json!({"type":"pesaje","solicitud_id":request_id,"estado":{"$ne":"rechazado"}})
+        } else {
+            json!({"type":"pesaje","recolector_id":c.sub,"comercio_id":commerce,"capturado_en":{"$gte":(now-Duration::hours(1)).to_rfc3339()}})
+        };
+        let response = a
+            .http
+            .post(format!("{}/{}/_find", a.couch, a.db))
+            .basic_auth(&a.db_user, Some(&a.db_password))
+            .json(&json!({"selector":selector,"limit":100}))
+            .send()
+            .await;
+        let docs = match response {
+            Ok(response) if response.status().is_success() => response
+                .json::<Value>()
+                .await
+                .ok()
+                .and_then(|v| v.get("docs").and_then(Value::as_array).cloned())
+                .unwrap_or_default(),
+            _ => {
+                return reject(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "validacion_no_disponible",
+                    "No se pudo completar la validación de duplicados; intenta de nuevo.",
+                )
+            }
+        };
+        let id = d.get("_id").and_then(Value::as_str).unwrap_or("");
+        if docs.iter().any(|v| {
+            v.get("_id").and_then(Value::as_str) != Some(id) && d.get("solicitud_id").is_some()
+        }) {
+            return reject(
+                StatusCode::CONFLICT,
+                "pesaje_duplicado",
+                "Ya existe un pesaje registrado para esta solicitud.",
+            );
+        }
+        if d.get("solicitud_id").is_none()
+            && docs
+                .iter()
+                .filter(|v| v.get("_id").and_then(Value::as_str) != Some(id))
+                .count()
+                >= 8
+        {
+            return reject(
+                StatusCode::TOO_MANY_REQUESTS,
+                "frecuencia_sospechosa",
+                "Se alcanzó el límite de 8 pesajes por hora para este recolector y comercio.",
+            );
+        }
+    }
+    None
+}
 async fn put_doc(
     State(a): State<Arc<App>>,
     axum::Extension(c): axum::Extension<Claims>,
     Path(id): Path<String>,
     Json(input): Json<DocInput>,
 ) -> Response {
-    if id.len() > 200 || input.body.as_object().is_none() {
-        return err(StatusCode::BAD_REQUEST);
+    if id.trim().is_empty() || id.len() > 200 || input.body.as_object().is_none() {
+        return domain_error(
+            StatusCode::BAD_REQUEST,
+            "datos_invalidos",
+            "El registro tiene un formato inválido.",
+            &c,
+        );
     }
     let mut d = input.body;
     if d.get("_id")
         .and_then(Value::as_str)
         .is_some_and(|x| x != id)
     {
-        return err(StatusCode::BAD_REQUEST);
+        return domain_error(
+            StatusCode::BAD_REQUEST,
+            "identificador_invalido",
+            "El identificador no coincide con el registro.",
+            &c,
+        );
     }
     d["_id"] = json!(id);
     let kind = d.get("type").and_then(Value::as_str).unwrap_or("");
     if kind == "movimiento_puntos" || kind == "config_puntos" {
-        return err(StatusCode::FORBIDDEN);
+        return domain_error(
+            StatusCode::FORBIDDEN,
+            "tipo_protegido",
+            "Este tipo de registro solo puede generarlo el sistema.",
+            &c,
+        );
+    }
+    if !matches!(kind, "comercio" | "solicitud_recoleccion" | "pesaje") {
+        return domain_error(
+            StatusCode::BAD_REQUEST,
+            "tipo_no_permitido",
+            "El tipo de registro no está permitido.",
+            &c,
+        );
     }
     if c.role == "recolector" {
         d["recolector_id"] = json!(c.sub);
@@ -563,7 +872,26 @@ async fn put_doc(
     let verified =
         kind == "pesaje" && d.get("estado").and_then(Value::as_str) == Some("verificado");
     if !can_write(&c, &d) {
-        return err(StatusCode::FORBIDDEN);
+        return domain_error(
+            StatusCode::FORBIDDEN,
+            "permiso_insuficiente",
+            "Tu rol no puede realizar este cambio.",
+            &c,
+        );
+    }
+    let existing = match get_doc_for_role(&a, &c, &id).await {
+        Ok(doc) => doc,
+        Err(_) => return err(StatusCode::SERVICE_UNAVAILABLE),
+    };
+    if kind == "solicitud_recoleccion" {
+        if let Some(response) = validate_request_transition(&c, existing.as_ref(), &d) {
+            return response;
+        }
+    }
+    if kind == "pesaje" {
+        if let Some(response) = validate_weighing(&a, &c, existing.as_ref(), &d).await {
+            return response;
+        }
     }
     if verified {
         if d.get("verificado_en").and_then(Value::as_str).is_none() {
@@ -572,10 +900,15 @@ async fn put_doc(
         if d.get("comercio_id").and_then(Value::as_str).is_none()
             || d.get("lineas").and_then(Value::as_array).is_none()
         {
-            return err(StatusCode::BAD_REQUEST);
+            return domain_error(
+                StatusCode::BAD_REQUEST,
+                "datos_pesaje_incompletos",
+                "El pesaje requiere comercio y al menos una línea de material.",
+                &c,
+            );
         }
         if calculate_points(&a, &d).await.is_err() {
-            return err(StatusCode::BAD_REQUEST);
+            return domain_error(StatusCode::BAD_REQUEST, "material_o_peso_invalido", "Revisa los materiales y pesos: cada línea debe ser válida y el total no puede superar 2,000 kg.", &c);
         }
     }
     if kind == "pesaje" {
@@ -584,7 +917,12 @@ async fn put_doc(
                 if existing.get("estado").and_then(Value::as_str) == Some("verificado") =>
             {
                 if !verified || !same_verification_event(&existing, &d) {
-                    return err(StatusCode::CONFLICT);
+                    return domain_error(
+                        StatusCode::CONFLICT,
+                        "pesaje_verificado_inmutable",
+                        "El pesaje ya fue verificado y no se puede alterar.",
+                        &c,
+                    );
                 }
                 if ensure_points_for_pesaje(&a, &existing).await.is_err() {
                     return err(StatusCode::SERVICE_UNAVAILABLE);
