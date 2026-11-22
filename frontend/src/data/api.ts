@@ -1,4 +1,4 @@
-import type { ChangesResponse, Documento, LoginResponse, Rol, SaldoPuntos, SaveResponse, SyncPage, TipoDocumento } from '../domain/tipos';
+import type { ChangesResponse, Documento, LoginResponse, Recompensa, Rol, SaldoPuntos, SaveResponse, SyncPage, TipoDocumento } from '../domain/tipos';
 
 const baseUrl = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 const tokenKey = 'reciclaje.jwt';
@@ -56,5 +56,9 @@ export const api = {
   },
   save<T extends Documento>(doc: T) {
     return request<SaveResponse>(`/api/docs/${encodeURIComponent(doc._id)}`, { method: 'PUT', body: JSON.stringify(doc) });
-  }
+  },
+  rewards() { return request<{ rewards: Recompensa[] }>('/api/rewards'); },
+  redeem(rewardId: string, requestId: string) { return request<{ ok: boolean; movement_id: string; puntos: number; idempotent?: boolean }>(`/api/rewards/${encodeURIComponent(rewardId)}/redeem`, { method: 'POST', body: JSON.stringify({ request_id: requestId }) }); },
+  createUser(input: { username: string; password: string; role: Rol; comercio_id?: string }) { return request<{ ok: boolean }>('/api/users', { method: 'POST', body: JSON.stringify(input) }); },
+  collectors() { return request<{ collectors: string[] }>('/api/collectors'); }
 };

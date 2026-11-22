@@ -113,6 +113,22 @@ case "$HTTP_STATUS" in
   *) require_success PUT "$COUCHDB_URL/reciclaje/config:puntos" ;;
 esac
 
+for reward_id in recompensa:kit-reciclaje recompensa:vale-comercio; do
+  case "$reward_id" in
+    recompensa:kit-reciclaje) reward_json='{"_id":"recompensa:kit-reciclaje","type":"recompensa","nombre":"Kit de reciclaje","descripcion":"Kit reutilizable para separación de residuos.","costo_puntos":100,"activo":true}' ;;
+    recompensa:vale-comercio) reward_json='{"_id":"recompensa:vale-comercio","type":"recompensa","nombre":"Vale para el comercio","descripcion":"Vale de incentivo canjeable en el comercio participante.","costo_puntos":250,"activo":true}' ;;
+  esac
+  request PUT "$COUCHDB_URL/reciclaje/$reward_id" "$reward_json"
+  case "$HTTP_STATUS" in
+    201|202) echo "couchdb-init: $reward_id creada." ;;
+    409|412)
+      request GET "$COUCHDB_URL/reciclaje/$reward_id"
+      require_success GET "$COUCHDB_URL/reciclaje/$reward_id"
+      ;;
+    *) require_success PUT "$COUCHDB_URL/reciclaje/$reward_id" ;;
+  esac
+done
+
 admin_name_json=$(json_escape "$BOOTSTRAP_ADMIN_USER")
 admin_password_json=$(json_escape "$BOOTSTRAP_ADMIN_PASSWORD")
 admin_doc_url="$COUCHDB_URL/_users/org.couchdb.user:$BOOTSTRAP_ADMIN_USER"

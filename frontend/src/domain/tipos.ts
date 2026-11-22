@@ -15,7 +15,7 @@ export interface Comercio extends DocumentoBase {
 
 export interface SolicitudRecoleccion extends DocumentoBase {
   type: 'solicitud_recoleccion'; comercio_id: string; estado: string;
-  creada_en?: string; fecha_solicitada?: string; observaciones?: string;
+  creada_en?: string; fecha_solicitada?: string; observaciones?: string; recolector_id?: string;
 }
 
 export interface LineaPesaje { material: string; peso_kg: number }
@@ -30,6 +30,8 @@ export interface MovimientoPuntos extends DocumentoBase {
   puntos: number; concepto: 'acreditacion' | 'canje'; creado_en?: string;
   pesaje_id?: string; regla_version?: number;
 }
+
+export interface Recompensa { _id: string; type: 'recompensa'; nombre: string; descripcion?: string; costo_puntos: number; activo: boolean }
 
 export type Documento = Comercio | SolicitudRecoleccion | Pesaje | MovimientoPuntos;
 export interface LoginResponse { token: string; username: string; role: Rol; comercio_id?: string | null; expires_in: number }

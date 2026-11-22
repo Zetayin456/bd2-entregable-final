@@ -138,6 +138,13 @@ td code { font-size: 9px; color: #77847b; }
 .balance-form { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; }
 .balance-form label { display: grid; gap: 5px; color: #65736a; font-size: 10px; }
 .balance-form input { min-height: 35px; border: 1px solid #dce7df; border-radius: 7px; padding: 7px; }
+.reward-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 14px 0 24px; }
+.reward-card { display: grid; justify-items: start; gap: 8px; padding: 17px; }
+.reward-card h3 { margin: 4px 0 0; font: 700 15px 'Manrope', sans-serif; }
+.reward-card p { margin: 0; color: var(--muted); font-size: 11px; }
+.reward-card strong { color: var(--green-dark); font-size: 14px; }
+.inline-action { display: inline-grid; gap: 4px; color: var(--muted); font-size: 10px; }
+.inline-action select { max-width: 170px; min-height: 30px; border: 1px solid var(--line); border-radius: 6px; }
 @keyframes sync-pulse { to { opacity: .35; } }
 
 @media (max-width: 1000px) {

@@ -147,7 +147,9 @@ export async function sincronizar(): Promise<void> {
       if (!navigator.onLine) { await refreshCounts(); setState('offline', 'Sin conexión. Los cambios quedan guardados localmente.'); return; }
       if (!sesion.token) { await refreshCounts(); setState('pending', 'Inicia sesión para sincronizar.'); return; }
       setState('syncing', 'Sincronizando cambios locales y remotos…');
-      for (const doc of await allLocal()) if (doc.sync_status === 'pending') await putRemote(doc);
+      const pendingDocs = (await allLocal()).filter(doc => doc.sync_status === 'pending');
+      pendingDocs.sort((left, right) => (left.type === 'pesaje' ? 0 : 1) - (right.type === 'pesaje' ? 0 : 1));
+      for (const doc of pendingDocs) await putRemote(doc);
       await pullChanges();
       snapshot = { ...snapshot, state: 'connected', lastSync: new Date().toISOString(), message: 'Sincronización al día' };
       await refreshCounts();

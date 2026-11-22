@@ -5,7 +5,7 @@
 - `backend/src/main.rs` contiene pruebas unitarias para cálculo de puntos, materiales y límites, transiciones de solicitudes por rol e identidad del evento de verificación/id de movimiento determinista.
 - `tests/integration.mjs` ejecuta un flujo contra una instancia activa: inicio de sesión correcto e incorrecto, rutas protegidas, roles y alcance por comercio, listado y cambios incrementales para el cliente, flujo y transiciones de solicitud, asociación de pesajes, límites, duplicados, ráfagas, verificación y saldo/idempotencia de puntos.
 - El target `verify` de Docker corre las unitarias, `cargo check` y Clippy con warnings como errores.
-- `client-sim` actualmente solo crea una base PouchDB y queda en espera; no simula llamadas ni replicación contra la API. `load/reciclaje.js` es una prueba k6 de disponibilidad HTTP (`/salud`), no una carga del flujo de negocio. El modo `netem` aplica latencia/pérdida de paquetes; no es una prueba automática de aceptación.
+- `client-sim` queda inactivo por defecto. En modo `SIM_MODE=offline-sync` almacena documentos pendientes en PouchDB sin red, los sincroniza por la API y confirma su lectura remota. `load/reciclaje.js` sigue siendo una prueba k6 de disponibilidad HTTP (`/salud`), no una carga de rendimiento del flujo de negocio. El modo `netem` aplica latencia/pérdida de paquetes; no es una prueba automática de aceptación.
 
 ## Requisitos y preparación
 
@@ -53,6 +53,16 @@ Prueba k6 opcional, independiente de la suite de integración:
 
 ```powershell
 docker compose --profile load run --rm k6
+```
+
+Validación adicional de canjes y de la cola offline:
+
+```powershell
+node tests/rewards.mjs
+$env:SIM_ADMIN_USER = (Select-String '^BOOTSTRAP_ADMIN_USER=' .env).Line.Split('=', 2)[1].Trim('"')
+$env:SIM_ADMIN_PASSWORD = (Select-String '^BOOTSTRAP_ADMIN_PASSWORD=' .env).Line.Split('=', 2)[1].Trim('"')
+docker compose run --rm -e SIM_MODE=offline-sync -e SIM_ADMIN_USER -e SIM_ADMIN_PASSWORD client-sim
+Remove-Item Env:SIM_ADMIN_USER, Env:SIM_ADMIN_PASSWORD
 ```
 
 ## Comprobación manual de la sincronización PouchDB en navegador

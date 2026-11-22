@@ -53,6 +53,10 @@ struct DocInput {
     #[serde(flatten)]
     body: Value,
 }
+#[derive(Deserialize)]
+struct RedeemInput {
+    request_id: String,
+}
 fn err(code: StatusCode) -> Response {
     let reason = match code {
         StatusCode::UNAUTHORIZED => "no_autorizado",
@@ -296,6 +300,9 @@ async fn ensure_points_for_pesaje(a: &App, pesaje: &Value) -> Result<Value, ()> 
         .or_else(|| pesaje.get("capturado_en").and_then(Value::as_str))
         .unwrap_or("fecha_no_disponible");
     let movement = json!({"_id":movement_id,"type":"movimiento_puntos","comercio_id":comercio_id,"concepto":"acreditacion","puntos":points,"origen":"pesaje_verificado","pesaje_id":pesaje_id,"regla_version":rules.get("version").cloned().unwrap_or(json!(1)),"creado_en":created_at});
+    if !change_wallet(a, comercio_id, &movement, points).await? {
+        return Err(());
+    }
     let write = a
         .http
         .put(format!(
@@ -329,6 +336,292 @@ async fn ensure_points_for_pesaje(a: &App, pesaje: &Value) -> Result<Value, ()> 
         }
     }
     Err(())
+}
+
+// A single CouchDB wallet document serializes debits/credits using _rev CAS.
+// The ledger remains the audit trail; applied_ids makes retries safe if a process
+// stops between changing the wallet and writing the corresponding movement.
+async fn change_wallet(
+    a: &App,
+    commerce_id: &str,
+    movement: &Value,
+    delta: i64,
+) -> Result<bool, ()> {
+    let movement_id = movement.get("_id").and_then(Value::as_str).ok_or(())?;
+    let wallet_id = format!("saldo:{commerce_id}");
+    for _ in 0..12 {
+        let response = couch_get(a, &wallet_id).await?;
+        let mut wallet = if response.status().is_success() {
+            response.json::<Value>().await.map_err(|_| ())?
+        } else if response.status().as_u16() == StatusCode::NOT_FOUND.as_u16() {
+            let balance = current_ledger_balance(a, commerce_id).await?;
+            json!({"_id":wallet_id,"type":"saldo_puntos","comercio_id":commerce_id,"saldo":balance,"applied_ids":[]})
+        } else {
+            return Err(());
+        };
+        let applied = wallet
+            .get("applied_ids")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if applied
+            .iter()
+            .any(|value| value.as_str() == Some(movement_id))
+        {
+            if let Some(previous) = wallet
+                .get("operations")
+                .and_then(|ops| ops.get(movement_id))
+            {
+                let same = [
+                    "concepto",
+                    "puntos",
+                    "pesaje_id",
+                    "recompensa_id",
+                    "solicitud_id",
+                ]
+                .iter()
+                .all(|key| previous.get(*key) == movement.get(*key));
+                return if same { Ok(true) } else { Err(()) };
+            }
+            return Ok(true);
+        }
+        let current = wallet.get("saldo").and_then(Value::as_i64).ok_or(())?;
+        let Some(next) = current.checked_add(delta) else {
+            return Err(());
+        };
+        if next < 0 {
+            return Ok(false);
+        }
+        wallet["saldo"] = json!(next);
+        let mut ids = applied;
+        ids.push(json!(movement_id));
+        wallet["applied_ids"] = json!(ids);
+        if !wallet.get("operations").is_some_and(Value::is_object) {
+            wallet["operations"] = json!({});
+        }
+        wallet["operations"][movement_id] = movement.clone();
+        let saved = a
+            .http
+            .put(format!(
+                "{}/{}/{}",
+                a.couch,
+                a.db,
+                urlencoding::encode(&wallet_id)
+            ))
+            .basic_auth(&a.db_user, Some(&a.db_password))
+            .json(&wallet)
+            .send()
+            .await
+            .map_err(|_| ())?;
+        if saved.status().is_success() {
+            return Ok(true);
+        }
+        if saved.status().as_u16() != StatusCode::CONFLICT.as_u16() {
+            return Err(());
+        }
+    }
+    Err(())
+}
+
+async fn current_ledger_balance(a: &App, commerce_id: &str) -> Result<i64, ()> {
+    let mut bookmark: Option<String> = None;
+    let mut balance = 0_i64;
+    loop {
+        let mut query =
+            json!({"selector":{"type":"movimiento_puntos","comercio_id":commerce_id},"limit":500});
+        if let Some(cursor) = bookmark.as_deref() {
+            query["bookmark"] = json!(cursor);
+        }
+        let response = a
+            .http
+            .post(format!("{}/{}/_find", a.couch, a.db))
+            .basic_auth(&a.db_user, Some(&a.db_password))
+            .json(&query)
+            .send()
+            .await
+            .map_err(|_| ())?;
+        if !response.status().is_success() {
+            return Err(());
+        }
+        let data = response.json::<Value>().await.map_err(|_| ())?;
+        let docs = data.get("docs").and_then(Value::as_array).ok_or(())?;
+        for doc in docs {
+            let points = doc.get("puntos").and_then(Value::as_i64).ok_or(())?;
+            let signed = if doc.get("concepto").and_then(Value::as_str) == Some("canje") {
+                points.checked_neg().ok_or(())?
+            } else {
+                points
+            };
+            balance = balance.checked_add(signed).ok_or(())?;
+        }
+        if docs.len() < 500 {
+            break;
+        }
+        bookmark = data
+            .get("bookmark")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if bookmark.is_none() {
+            return Err(());
+        }
+    }
+    Ok(balance)
+}
+
+async fn rewards(
+    State(a): State<Arc<App>>,
+    axum::Extension(c): axum::Extension<Claims>,
+) -> Response {
+    let response = proxy_request(a.http.post(format!("{}/{}/_find", a.couch, a.db)), &a, &c)
+        .json(&json!({"selector":{"type":"recompensa","activo":true},"limit":200}))
+        .send()
+        .await;
+    let Ok(response) = response else {
+        return err(StatusCode::SERVICE_UNAVAILABLE);
+    };
+    if !response.status().is_success() {
+        return err(StatusCode::BAD_GATEWAY);
+    }
+    match response.json::<Value>().await {
+        Ok(value) => {
+            Json(json!({"rewards":value.get("docs").cloned().unwrap_or(json!([]))})).into_response()
+        }
+        Err(_) => err(StatusCode::BAD_GATEWAY),
+    }
+}
+
+async fn collectors(
+    State(a): State<Arc<App>>,
+    axum::Extension(c): axum::Extension<Claims>,
+) -> Response {
+    if !matches!(c.role.as_str(), "admin_plataforma" | "operador_acopio") {
+        return err(StatusCode::FORBIDDEN);
+    }
+    let response = a
+        .http
+        .get(format!("{}/_users/_all_docs", a.couch))
+        .query(&[("include_docs", "true"), ("limit", "1000")])
+        .basic_auth(&a.db_user, Some(&a.db_password))
+        .send()
+        .await;
+    let Ok(response) = response else {
+        return err(StatusCode::SERVICE_UNAVAILABLE);
+    };
+    if !response.status().is_success() {
+        return err(StatusCode::BAD_GATEWAY);
+    }
+    let Ok(data) = response.json::<Value>().await else {
+        return err(StatusCode::BAD_GATEWAY);
+    };
+    let list = data
+        .get("rows")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row.get("doc"))
+        .filter(|user| {
+            user.get("roles")
+                .and_then(Value::as_array)
+                .is_some_and(|roles| roles.iter().any(|r| r.as_str() == Some("recolector")))
+        })
+        .filter_map(|user| user.get("name").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    Json(json!({"collectors":list})).into_response()
+}
+
+async fn redeem_reward(
+    State(a): State<Arc<App>>,
+    axum::Extension(c): axum::Extension<Claims>,
+    Path(id): Path<String>,
+    Json(input): Json<RedeemInput>,
+) -> Response {
+    let Some(commerce_id) = c.comercio_id.as_deref().filter(|_| c.role == "comercio") else {
+        return err(StatusCode::FORBIDDEN);
+    };
+    if id.len() > 200
+        || input.request_id.len() < 8
+        || input.request_id.len() > 100
+        || !input
+            .request_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return domain_error(
+            StatusCode::BAD_REQUEST,
+            "solicitud_canje_invalida",
+            "La solicitud de canje debe incluir un identificador válido.",
+            &c,
+        );
+    }
+    let reward = match couch_get(&a, &id).await {
+        Ok(r) if r.status().is_success() => r.json::<Value>().await.ok(),
+        _ => None,
+    };
+    let Some(reward) = reward.filter(|doc| {
+        doc.get("type").and_then(Value::as_str) == Some("recompensa")
+            && doc.get("activo").and_then(Value::as_bool) == Some(true)
+    }) else {
+        return err(StatusCode::NOT_FOUND);
+    };
+    let points = reward
+        .get("costo_puntos")
+        .and_then(Value::as_i64)
+        .filter(|n| *n > 0 && *n <= 1_000_000)
+        .unwrap_or(0);
+    if points == 0 {
+        return err(StatusCode::BAD_GATEWAY);
+    }
+    let movement_id = format!("canje:{commerce_id}:{}", input.request_id);
+    if let Ok(existing) = couch_get(&a, &movement_id).await {
+        if existing.status().is_success() {
+            if let Ok(doc) = existing.json::<Value>().await {
+                if doc.get("recompensa_id").and_then(Value::as_str) == Some(id.as_str())
+                    && doc.get("comercio_id").and_then(Value::as_str) == Some(commerce_id)
+                    && doc.get("puntos").and_then(Value::as_i64) == Some(points)
+                {
+                    return Json(json!({"ok":true,"movement_id":movement_id,"puntos":points,"recompensa":reward.get("nombre"),"idempotent":true})).into_response();
+                }
+                return domain_error(
+                    StatusCode::CONFLICT,
+                    "solicitud_canje_duplicada",
+                    "El identificador de solicitud ya se usó para otro canje.",
+                    &c,
+                );
+            }
+            return err(StatusCode::BAD_GATEWAY);
+        }
+    }
+    let movement = json!({"_id":movement_id,"type":"movimiento_puntos","comercio_id":commerce_id,"concepto":"canje","puntos":points,"origen":"recompensa","recompensa_id":id,"recompensa_nombre":reward.get("nombre"),"solicitud_id":input.request_id,"creado_en":Utc::now().to_rfc3339()});
+    match change_wallet(&a, commerce_id, &movement, -points).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return domain_error(
+                StatusCode::CONFLICT,
+                "saldo_insuficiente",
+                "El saldo disponible no alcanza para esta recompensa.",
+                &c,
+            )
+        }
+        Err(()) => return err(StatusCode::SERVICE_UNAVAILABLE),
+    }
+    let put = a
+        .http
+        .put(format!(
+            "{}/{}/{}",
+            a.couch,
+            a.db,
+            urlencoding::encode(&movement_id)
+        ))
+        .basic_auth(&a.db_user, Some(&a.db_password))
+        .json(&movement)
+        .send()
+        .await;
+    match put {
+        Ok(response) if response.status().is_success() => (StatusCode::CREATED, Json(json!({"ok":true,"movement_id":movement_id,"puntos":points,"recompensa":reward.get("nombre")}))).into_response(),
+        Ok(response) if response.status().as_u16() == StatusCode::CONFLICT.as_u16() => Json(json!({"ok":true,"movement_id":movement_id,"puntos":points,"recompensa":reward.get("nombre"),"idempotent":true})).into_response(),
+        _ => err(StatusCode::SERVICE_UNAVAILABLE),
+    }
 }
 async fn reconcile_verified_pesajes(a: &App) -> Result<usize, ()> {
     let mut bookmark: Option<String> = None;
@@ -930,6 +1223,90 @@ async fn put_doc(
         if let Some(response) = validate_request_transition(&c, existing.as_ref(), &d) {
             return response;
         }
+        let state = d.get("estado").and_then(Value::as_str).unwrap_or("");
+        if matches!(state, "asignada" | "completada") {
+            let collector_name = d.get("recolector_id").and_then(Value::as_str).unwrap_or("");
+            if collector_name.is_empty()
+                || existing
+                    .as_ref()
+                    .and_then(|old| old.get("estado"))
+                    .and_then(Value::as_str)
+                    == Some("asignada")
+                    && existing
+                        .as_ref()
+                        .and_then(|old| old.get("recolector_id"))
+                        .and_then(Value::as_str)
+                        != Some(collector_name)
+            {
+                return domain_error(
+                    StatusCode::BAD_REQUEST,
+                    "recolector_no_asignado",
+                    "La solicitud requiere conservar un recolector asignado.",
+                    &c,
+                );
+            }
+            let user = a
+                .http
+                .get(format!(
+                    "{}/_users/org.couchdb.user:{}",
+                    a.couch,
+                    urlencoding::encode(collector_name)
+                ))
+                .basic_auth(&a.db_user, Some(&a.db_password))
+                .send()
+                .await;
+            let Ok(user) = user else {
+                return err(StatusCode::SERVICE_UNAVAILABLE);
+            };
+            let Ok(user) = user.json::<Value>().await else {
+                return domain_error(
+                    StatusCode::BAD_REQUEST,
+                    "recolector_invalido",
+                    "El recolector indicado no existe.",
+                    &c,
+                );
+            };
+            if !user
+                .get("roles")
+                .and_then(Value::as_array)
+                .is_some_and(|roles| roles.iter().any(|role| role.as_str() == Some("recolector")))
+            {
+                return domain_error(
+                    StatusCode::BAD_REQUEST,
+                    "recolector_invalido",
+                    "El usuario asignado no tiene rol de recolector.",
+                    &c,
+                );
+            }
+        }
+        if state == "completada" {
+            let request_id = d.get("_id").and_then(Value::as_str).unwrap_or("");
+            let response = a.http.post(format!("{}/{}/_find", a.couch, a.db))
+                .basic_auth(&a.db_user, Some(&a.db_password))
+                .json(&json!({"selector":{"type":"pesaje","solicitud_id":request_id,"estado":"verificado"},"limit":1}))
+                .send().await;
+            let Ok(response) = response else {
+                return err(StatusCode::SERVICE_UNAVAILABLE);
+            };
+            if !response.status().is_success() {
+                return err(StatusCode::BAD_GATEWAY);
+            }
+            let Ok(page) = response.json::<Value>().await else {
+                return err(StatusCode::BAD_GATEWAY);
+            };
+            if !page
+                .get("docs")
+                .and_then(Value::as_array)
+                .is_some_and(|docs| !docs.is_empty())
+            {
+                return domain_error(
+                    StatusCode::CONFLICT,
+                    "pesaje_pendiente",
+                    "La recolección solo se puede cerrar después de verificar su pesaje.",
+                    &c,
+                );
+            }
+        }
     }
     if kind == "pesaje" {
         if let Some(response) = validate_weighing(&a, &c, existing.as_ref(), &d).await {
@@ -1089,6 +1466,34 @@ async fn create_user(
     {
         return err(StatusCode::BAD_REQUEST);
     }
+    if u.role == "comercio" {
+        let Some(commerce_id) = u.comercio_id.as_deref() else {
+            return err(StatusCode::BAD_REQUEST);
+        };
+        match couch_get(&a, commerce_id).await {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<Value>().await {
+                    Ok(doc) if doc.get("type").and_then(Value::as_str) == Some("comercio") => {}
+                    _ => {
+                        return domain_error(
+                            StatusCode::BAD_REQUEST,
+                            "comercio_invalido",
+                            "La cuenta de comercio debe vincularse a un comercio registrado.",
+                            &c,
+                        )
+                    }
+                }
+            }
+            _ => {
+                return domain_error(
+                    StatusCode::BAD_REQUEST,
+                    "comercio_invalido",
+                    "El comercio indicado no existe.",
+                    &c,
+                )
+            }
+        }
+    }
     let v = json!({"name":u.username,"roles":[u.role],"type":"user","password":u.password,"comercio_id":u.comercio_id});
     let r = a
         .http
@@ -1149,6 +1554,9 @@ async fn main() {
     });
     let protected: Router<Arc<App>> = Router::new()
         .route("/api/users", post(create_user))
+        .route("/api/rewards", get(rewards))
+        .route("/api/rewards/:id/redeem", post(redeem_reward))
+        .route("/api/collectors", get(collectors))
         .route("/api/points/balance", get(points_balance))
         .route("/api/changes", get(changes))
         .route("/api/docs", get(list_docs))
