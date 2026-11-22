@@ -74,7 +74,7 @@ Remove-Item Env:SIM_ADMIN_USER, Env:SIM_ADMIN_PASSWORD
 
 ## Resultado y limitaciones
 
-Para dar la suite por aprobada deben terminar correctamente `docker compose config --quiet`, el build `verify`, el build del frontend, la suite Node y el chequeo `/salud`. La prueba Node usa la API y CouchDB reales, y valida el movimiento de puntos idempotente. La verificación en navegador sigue siendo manual porque el repositorio no incluye Playwright/Webdriver. La prueba de carga actual solo mide disponibilidad y no reemplaza pruebas de rendimiento del flujo autenticado.
+Para dar la suite por aprobada deben terminar correctamente `docker compose config --quiet`, el build `verify`, el build del frontend, `tests/integration.mjs`, `tests/rewards.mjs`, la simulación offline y el chequeo `/salud`. La verificación en navegador sigue siendo manual porque el repositorio no incluye Playwright/Webdriver. La carga autenticada y sus consultas de latencia/CPU/RAM se documentan en [Módulo 8](MODULO8_METRICAS_EXPERIMENTOS.md).
 
 ### Ejecución en el entorno de desarrollo actual
 

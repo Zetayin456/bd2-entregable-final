@@ -58,7 +58,7 @@ export async function listarDocumentos<T extends Documento>(type?: TipoDocumento
 export async function guardarLocal<T extends Documento>(document: T): Promise<void> {
   const previous = await db.get(document._id).catch(() => undefined);
   const next = { ...previous, ...document, ...(previous?._rev ? { _rev: previous._rev } : {}), remote_rev: previous?.remote_rev ?? ('remote_rev' in document ? document.remote_rev as string | undefined : undefined), sync_status: 'pending' as const, sync_error: undefined, local_modified_at: new Date().toISOString() } as DocumentoLocal;
-  await db.put(next);
+  await (db.put as unknown as (value: DocumentoLocal) => Promise<unknown>)(next);
   await refreshCounts();
 }
 

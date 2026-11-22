@@ -7,7 +7,9 @@ const commerceKey = 'reciclaje.comercio';
 const userKey = 'reciclaje.user';
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: string) { super(message); this.name = 'ApiError'; }
+  readonly status: number;
+  readonly code?: string;
+  constructor(message: string, status: number, code?: string) { super(message); this.name = 'ApiError'; this.status = status; this.code = code; }
 }
 
 export const sesion = {

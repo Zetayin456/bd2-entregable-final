@@ -92,6 +92,22 @@ case "$HTTP_STATUS" in
   *) require_success PUT "$COUCHDB_URL/reciclaje" ;;
 esac
 
+create_mango_index() {
+  index_name=$1
+  fields_json=$2
+  index_json="{\"ddoc\":\"$index_name\",\"name\":\"$index_name\",\"type\":\"json\",\"index\":{\"fields\":[$fields_json]}}"
+  request POST "$COUCHDB_URL/reciclaje/_index" "$index_json"
+  require_success "POST _index ($index_name)" "$COUCHDB_URL/reciclaje/_index"
+  echo "couchdb-init: índice Mango $index_name disponible."
+}
+
+create_mango_index idx_document_type '"type"'
+create_mango_index idx_rewards_active '"type","activo"'
+create_mango_index idx_movements_commerce '"type","comercio_id"'
+create_mango_index idx_weighings_state '"type","estado"'
+create_mango_index idx_weighings_request '"type","solicitud_id"'
+create_mango_index idx_capture_window '"type","recolector_id","comercio_id","capturado_en"'
+
 security_json='{"admins":{"names":[],"roles":["admin_plataforma"]},"members":{"names":[],"roles":["operador_acopio","recolector","comercio"]}}'
 request PUT "$COUCHDB_URL/reciclaje/_security" "$security_json"
 require_success PUT "$COUCHDB_URL/reciclaje/_security"

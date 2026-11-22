@@ -44,6 +44,21 @@ function renderLogin() {
 
 async function list<T extends Documento>(type: TipoDocumento) { return listarDocumentos<T>(type); }
 async function saveOfflineFirst<T extends Documento>(doc: T) { await guardarLocal(doc); void sincronizar(); }
+async function saveOperational<T extends Documento>(doc: T, successMessage: string, pendingMessage = successMessage) {
+  await guardarLocal(doc);
+  if (navigator.onLine && sesion.token) await sincronizar();
+  const current = (await list(doc.type)).find(item => item._id === doc._id);
+  if (current?.sync_error) return { message: current.sync_error, isError: true };
+  if (current?.sync_status === 'conflict') return { message: 'El registro cambió en el servidor; revisa el conflicto antes de continuar.', isError: true };
+  return current?.sync_status === 'synced'
+    ? { message: `${successMessage} Confirmado por el servidor.`, isError: false }
+    : { message: `${pendingMessage} Guardado localmente; pendiente de sincronización.`, isError: false };
+}
+async function finishOperational(doc: Documento, successMessage: string, view: string, pendingMessage = successMessage) {
+  const outcome = await saveOperational(doc, successMessage, pendingMessage);
+  await openView(view);
+  notify(outcome.message, outcome.isError);
+}
 const dateText = (value?: string) => value ? new Date(value).toLocaleString() : '—';
 function table(headers: string[], rows: string[][]) { if (!rows.length) return '<div class="empty-state"><span>♻</span><b>No hay registros disponibles</b><p>Los datos aparecerán aquí cuando existan registros en el servidor.</p></div>'; return `<div class="table-wrap"><table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`; }
 function section(titleText: string, description: string, body: string, action = '') { content.innerHTML = `<div class="section-heading"><div><h2>${esc(titleText)}</h2><p>${esc(description)}</p></div>${action}</div><article class="panel list-panel">${body}</article><div id="feedback" class="feedback" role="status" aria-live="polite"></div>`; }
@@ -93,46 +108,89 @@ async function showSolicitudes() {
   });
   section('Solicitudes de recolección', 'Comercios solicitan; operaciones aprueba y asigna; el recolector registra el pesaje y operaciones cierra tras verificarlo.', `<div class="panel-heading"><div><h3>Solicitudes</h3><p>${docs.length} registro(s) local(es)</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Comercio','Estado','Recolector','Fecha solicitada','Observaciones','Sincronización','Acción'],rows)}`, canCreate ? addAction('Crear solicitud') : '');
   content.querySelector('#refresh-list')?.addEventListener('click', () => openView('solicitudes'));
-  content.querySelector('#add-record')?.addEventListener('click', () => formDialog('Nueva solicitud', [['comercio_id','ID del comercio','text'],['fecha_solicitada','Fecha solicitada','date'],['observaciones','Observaciones','text']], async values => { const id=`solicitud:${crypto.randomUUID()}`; await saveOfflineFirst({ _id:id,type:'solicitud_recoleccion',comercio_id:values.comercio_id,fecha_solicitada:values.fecha_solicitada,observaciones:values.observaciones,estado:'pendiente',creada_en:new Date().toISOString() }); await openView('solicitudes'); notify('Solicitud guardada; se sincronizará al recuperar conexión.'); }));
+  content.querySelector('#add-record')?.addEventListener('click', () => formDialog('Nueva solicitud', [['comercio_id','ID del comercio','text'],['fecha_solicitada','Fecha solicitada','date'],['observaciones','Observaciones','text']], async values => { const id=`solicitud:${crypto.randomUUID()}`; await finishOperational({ _id:id,type:'solicitud_recoleccion',comercio_id:values.comercio_id,fecha_solicitada:values.fecha_solicitada,observaciones:values.observaciones,estado:'pendiente',creada_en:new Date().toISOString() },'Solicitud creada.','solicitudes'); }));
   content.querySelectorAll<HTMLButtonElement>('[data-approve],[data-cancel],[data-complete]').forEach(button=>button.addEventListener('click',async()=>{
     const doc=docs.find(item=>item._id===(button.dataset.approve||button.dataset.cancel||button.dataset.complete)); if(!doc)return;
     const next={...doc,estado:button.hasAttribute('data-approve')?'aprobada':button.hasAttribute('data-cancel')?'cancelada':'completada'};
-    try{await saveOfflineFirst(next);await openView('solicitudes');notify('Cambio guardado en la cola de sincronización.');}catch(error){report(error);}
+    const action=button.hasAttribute('data-approve')?'Solicitud aprobada.':button.hasAttribute('data-cancel')?'Solicitud cancelada.':'Recolección cerrada.';
+    try{await finishOperational(next,action,'solicitudes');}catch(error){report(error);}
   }));
   content.querySelectorAll<HTMLButtonElement>('[data-assign]').forEach(button=>button.addEventListener('click',async()=>{
     const doc=docs.find(item=>item._id===button.dataset.assign);const collector=content.querySelector<HTMLSelectElement>(`select[data-collector="${CSS.escape(button.dataset.assign!)}"]`)?.value;if(!doc||!collector){notify('Selecciona un recolector para asignar la solicitud.',true);return;}
-    try{await saveOfflineFirst({...doc,estado:'asignada',recolector_id:collector});await openView('solicitudes');notify(`Solicitud asignada a ${collector}.`);}catch(error){report(error);}
+    try{await finishOperational({...doc,estado:'asignada',recolector_id:collector},`Solicitud asignada a ${collector}.`,'solicitudes');}catch(error){report(error);}
   }));
 }
 
 async function showPesajes() {
   const docs = await list<Pesaje>('pesaje');
   const role = sesion.role;
-  const canCapture = role === 'recolector' || role === 'admin_plataforma';
+  const canCapture = role === 'recolector';
   const canVerify = role === 'operador_acopio' || role === 'admin_plataforma';
   const assigned = (await list<SolicitudRecoleccion>('solicitud_recoleccion')).filter(request=>request.estado==='asignada'&&request.recolector_id===sesion.username);
   const rows = docs.map(d => [esc(d.comercio_id),esc(d.recolector_id),esc(d.lineas.map(line => `${line.material}: ${line.peso_kg} kg`).join(', ')),esc(d.estado),esc(d.sync_error ? `Rechazado: ${d.sync_error}` : d.sync_status==='pending'?'pendiente de sync':d.sync_status==='conflict'?'conflicto':'al día'),esc(dateText(d.capturado_en)),canVerify && d.estado === 'pendiente_verificacion' ? `<button class="secondary-button" data-verify="${esc(d._id)}">Verificar</button>` : `<code>${esc(d._id)}</code>`]);
   section('Registro de pesajes', 'Pesajes guardados localmente, con estado de envío y verificación.', `<div class="panel-heading"><div><h3>Pesajes</h3><p>${docs.length} registro(s) local(es)</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Comercio','Recolector','Material y peso','Verificación','Sincronización','Capturado','Acción'],rows)}`, canCapture ? addAction('Registrar pesaje') : '');
   content.querySelector('#refresh-list')?.addEventListener('click', () => openView('pesajes'));
-  content.querySelectorAll<HTMLButtonElement>('[data-verify]').forEach(button => button.addEventListener('click', async () => { const doc=docs.find(item=>item._id===button.dataset.verify);if(!doc)return;try{await saveOfflineFirst({...doc,estado:'verificado' as EstadoPesaje,verificado_en:new Date().toISOString()});await openView('pesajes');notify('Verificación guardada localmente; queda en cola de sincronización.');}catch(error){report(error);}}));
+  content.querySelectorAll<HTMLButtonElement>('[data-verify]').forEach(button => button.addEventListener('click', async () => { const doc=docs.find(item=>item._id===button.dataset.verify);if(!doc)return;try{await finishOperational({...doc,estado:'verificado' as EstadoPesaje,verificado_en:new Date().toISOString()},'Pesaje verificado; puntos acreditados.','pesajes','Verificación guardada; los puntos se acreditarán al sincronizar.');}catch(error){report(error);}}));
   if(canCapture)content.querySelector('#add-record')?.addEventListener('click',()=>{
     if(!assigned.length){notify('No tienes solicitudes asignadas para registrar una recolección.',true);return;}
-    formDialog('Registrar pesaje de una solicitud', [['solicitud_id','Solicitud asignada','select'],['material','Material','select'],['peso_kg','Peso en kg','number']], async values=>{const request=assigned.find(item=>item._id===values.solicitud_id);if(!request)throw new Error('Selecciona una solicitud asignada.');const id=`pesaje:${crypto.randomUUID()}`;await saveOfflineFirst({_id:id,type:'pesaje',solicitud_id:request._id,comercio_id:request.comercio_id,recolector_id:sesion.username??'',lineas:[{material:values.material,peso_kg:Number(values.peso_kg)}],estado:'pendiente_verificacion',capturado_en:new Date().toISOString()});await openView('pesajes');notify('Pesaje guardado; queda pendiente de sincronización y verificación.');},{solicitud_id:assigned.map(request=>({value:request._id,label:`${request._id} · ${request.comercio_id}`}))});
+    formDialog('Registrar pesaje de una solicitud', [['solicitud_id','Solicitud asignada','select'],['material','Material','select'],['peso_kg','Peso en kg','number']], async values=>{const request=assigned.find(item=>item._id===values.solicitud_id);if(!request)throw new Error('Selecciona una solicitud asignada.');const id=`pesaje:${crypto.randomUUID()}`;await finishOperational({_id:id,type:'pesaje',solicitud_id:request._id,comercio_id:request.comercio_id,recolector_id:sesion.username??'',lineas:[{material:values.material,peso_kg:Number(values.peso_kg)}],estado:'pendiente_verificacion',capturado_en:new Date().toISOString()},'Pesaje registrado; queda pendiente de verificación.','pesajes');},{solicitud_id:assigned.map(request=>({value:request._id,label:`${request._id} · ${request.comercio_id}`}))});
   });
 }
 
 async function showPuntos() {
-  const docs=await list<MovimientoPuntos>('movimiento_puntos');
-  const rewards=(await api.rewards()).rewards;
+  const localMovements=await list<MovimientoPuntos>('movimiento_puntos');
   const isCommerce=sesion.role==='comercio'&&Boolean(sesion.comercioId);
   const canQuery=sesion.role==='admin_plataforma'||sesion.role==='operador_acopio';
-  const localBalance=docs.reduce((sum,d)=>sum+(d.concepto==='canje'?-d.puntos:d.puntos),0);
-  section('Puntos y recompensas', 'Los puntos se acreditan al verificar pesajes; los canjes descuentan el saldo en el servidor y quedan registrados en el ledger.', `<article class="balance-card"><div><span>Saldo autoritativo del servidor</span><strong id="server-balance">${canQuery?'Selecciona un comercio':`${localBalance.toLocaleString()} pts · saldo local`}</strong></div>${canQuery?'<form id="balance-form" class="balance-form"><label for="balance-commerce">ID del comercio</label><input id="balance-commerce" name="comercio_id" required maxlength="200"><button class="secondary-button" type="submit">Consultar saldo</button></form>':''}<p id="balance-detail" class="note">${canQuery?'Consulta un comercio para obtener su saldo y ledger actualizados.':'Saldo calculado localmente; se actualizará al sincronizar.'}</p></article><div class="panel-heading"><div><h3>Catálogo de recompensas</h3><p>El costo y la disponibilidad se validan en la API.</p></div></div><div class="reward-grid">${rewards.map(reward=>`<article class="panel reward-card"><span class="stat-icon purple">✧</span><h3>${esc(reward.nombre)}</h3><p>${esc(reward.descripcion||'Recompensa participante')}</p><strong>${reward.costo_puntos.toLocaleString()} pts</strong>${isCommerce?`<button class="primary-button" data-redeem="${esc(reward._id)}">Canjear</button>`:''}</article>`).join('')}</div><div class="panel-heading"><div><h3>Historial de movimientos</h3><p>Incluye acreditaciones y canjes con sus referencias.</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Comercio','Concepto','Puntos','Origen','Pesaje / solicitud','Regla','Sincronización','Fecha'],docs.map(d=>[esc(d.comercio_id),esc(d.concepto),esc(d.puntos),esc(d.origen||'—'),esc(d.pesaje_id||d._id),esc(d.regla_version??'—'),esc(d.sync_status==='pending'?'pendiente':d.sync_status==='conflict'?'conflicto':'al día'),esc(dateText(d.creado_en))]))}<div class="note">No se permiten acreditaciones manuales desde el cliente.</div>`);
+  let rewards:Recompensa[]=[];
+  let rewardsError='';
+  try{rewards=(await api.rewards()).rewards;}catch(error){if(error instanceof ApiError&&(error.status===401||error.status===403))throw error;rewardsError=error instanceof ApiError?error.message:'No se pudo cargar el catálogo.';}
+
+  let serverBalance:number|null=null;
+  let serverMovements:MovimientoPuntos[]=[];
+  let balanceError='';
+  if(isCommerce){
+    try{const result=await api.saldoPuntos();serverBalance=result.saldo;serverMovements=result.movimientos;}
+    catch(error){if(error instanceof ApiError&&(error.status===401||error.status===403))throw error;balanceError=error instanceof ApiError?error.message:'No se pudo consultar el saldo del servidor.';}
+  }
+  const pendingMovements=localMovements.filter(item=>item.sync_status==='pending'||item.sync_status==='conflict');
+  const serverIds=new Set(serverMovements.map(item=>item._id));
+  const movements=isCommerce&&serverBalance!==null
+    ? [...serverMovements.map(item=>({...item,sync_status:'synced' as const})),...pendingMovements.filter(item=>!serverIds.has(item._id))]
+    : localMovements;
+  const localBalance=localMovements.reduce((sum,item)=>sum+(item.concepto==='canje'?-item.puntos:item.puntos),0);
+  const balanceLabel=isCommerce
+    ? serverBalance===null?`No disponible · ${localBalance.toLocaleString()} pts local`: `${serverBalance.toLocaleString()} pts`
+    : canQuery?'Selecciona un comercio':'Solo disponible para comercios';
+  const balanceDetail=isCommerce
+    ? serverBalance===null?`${balanceError} Los canjes requieren conexión y saldo actualizado.`:`${serverMovements.length} movimiento(s) confirmados en el servidor · comercio ${sesion.comercioId}`
+    : canQuery?'Consulta un comercio para ver su saldo autoritativo y ledger.':'Consulta el saldo desde una cuenta de comercio.';
+  const rewardsContent=rewards.length
+    ? `<div class="reward-grid">${rewards.map(reward=>{const enough=serverBalance!==null&&serverBalance>=reward.costo_puntos;const label=serverBalance===null?'Saldo no disponible':enough?'Canjear':'Saldo insuficiente';return `<article class="panel reward-card"><span class="stat-icon purple">✧</span><h3>${esc(reward.nombre)}</h3><p>${esc(reward.descripcion||'Recompensa participante')}</p><strong>${reward.costo_puntos.toLocaleString()} pts</strong>${isCommerce?`<button class="primary-button" data-redeem="${esc(reward._id)}" data-cost="${reward.costo_puntos}" ${enough?'':'disabled'} title="${enough?'Solicitar canje':esc(label)}">${label}</button>`:''}</article>`;}).join('')}</div>`
+    : `<div class="empty-state"><span>✧</span><b>${rewardsError?'Catálogo no disponible':'No hay recompensas activas'}</b><p>${esc(rewardsError||'Las recompensas disponibles aparecerán aquí.')}</p></div>`;
+  section('Puntos y recompensas', 'Los puntos se acreditan al verificar pesajes; cada canje se valida contra el saldo del servidor y se registra en el ledger.', `<article class="balance-card"><div><span>Saldo autoritativo del servidor</span><strong id="server-balance">${esc(balanceLabel)}</strong></div>${canQuery?'<form id="balance-form" class="balance-form"><label for="balance-commerce">ID del comercio</label><input id="balance-commerce" name="comercio_id" required maxlength="200" placeholder="comercio:…"><button class="secondary-button" type="submit">Consultar saldo</button></form>':''}<p id="balance-detail" class="note">${esc(balanceDetail)}</p></article><div class="panel-heading"><div><h3>Catálogo de recompensas</h3><p>${isCommerce?'Los canjes requieren conexión y saldo suficiente confirmado.':'Consulta recompensas disponibles para los comercios.'}</p></div></div>${rewardsContent}<div class="panel-heading"><div><h3>Historial de movimientos</h3><p>Los canjes aparecen como descuentos; las acreditaciones, como puntos ganados.</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Comercio','Concepto','Puntos netos','Origen','Pesaje / solicitud','Regla','Sincronización','Fecha'],movements.map(item=>[esc(item.comercio_id),esc(item.concepto),esc(`${item.concepto==='canje'?'-':'+'}${item.puntos}`),esc(item.origen||'—'),esc(item.pesaje_id||item._id),esc(item.regla_version??'—'),esc(item.sync_status==='pending'?'pendiente':item.sync_status==='conflict'?'conflicto':'confirmado'),esc(dateText(item.creado_en))]))}<div class="note">No se permiten acreditaciones manuales desde el cliente.</div>`);
   content.querySelector('#refresh-list')?.addEventListener('click',()=>openView('puntos'));
-  const updateServerBalance=async(comercioId:string)=>{try{const result=await api.saldoPuntos(comercioId);content.querySelector<HTMLElement>('#server-balance')!.textContent=`${result.saldo.toLocaleString()} pts`;content.querySelector<HTMLElement>('#balance-detail')!.textContent=`${result.movimientos.length} movimiento(s) en el servidor · comercio ${result.comercio_id}`;}catch(error){const target=content.querySelector<HTMLElement>('#balance-detail');if(target)target.textContent=error instanceof ApiError?error.message:'No se pudo consultar el saldo remoto.';}};
-  if(sesion.role==='comercio'&&sesion.comercioId)void updateServerBalance(sesion.comercioId);
+  const updateServerBalance=async(comercioId:string)=>{const detail=content.querySelector<HTMLElement>('#balance-detail');try{const result=await api.saldoPuntos(comercioId);const balance=content.querySelector<HTMLElement>('#server-balance');if(balance)balance.textContent=`${result.saldo.toLocaleString()} pts`;if(detail)detail.textContent=`${result.movimientos.length} movimiento(s) en el servidor · comercio ${result.comercio_id}`;}catch(error){if(detail)detail.textContent=error instanceof ApiError?error.message:'No se pudo consultar el saldo remoto.';}};
   content.querySelector<HTMLFormElement>('#balance-form')?.addEventListener('submit',event=>{event.preventDefault();const form=new FormData(event.currentTarget as HTMLFormElement);void updateServerBalance(String(form.get('comercio_id')).trim());});
-  content.querySelectorAll<HTMLButtonElement>('[data-redeem]').forEach(button=>button.addEventListener('click',async()=>{const rewardId=button.dataset.redeem!;button.disabled=true;const requestId=button.dataset.requestId||crypto.randomUUID();button.dataset.requestId=requestId;try{const result=await api.redeem(rewardId,requestId);notify(`Canje registrado: ${result.puntos} puntos descontados.`);await openView('puntos');}catch(error){button.disabled=false;report(error);}}));
+  content.querySelectorAll<HTMLButtonElement>('[data-redeem]').forEach(button=>button.addEventListener('click',async()=>{
+    const cost=Number(button.dataset.cost);
+    if(serverBalance===null){notify('No se puede solicitar el canje sin confirmar el saldo del servidor.',true);return;}
+    if(serverBalance<cost){notify(`Saldo insuficiente. Se requieren ${cost.toLocaleString()} puntos y tienes ${serverBalance.toLocaleString()}.`,true);return;}
+    button.disabled=true;
+    const requestId=button.dataset.requestId||crypto.randomUUID();
+    button.dataset.requestId=requestId;
+    try{
+      const result=await api.redeem(button.dataset.redeem!,requestId);
+      await sincronizar();
+      await openView('puntos');
+      notify(result.idempotent?`Canje ya registrado: ${result.puntos.toLocaleString()} puntos descontados.`:`Canje confirmado: ${result.puntos.toLocaleString()} puntos descontados; saldo y movimientos actualizados.`);
+    }catch(error){
+      button.disabled=false;
+      if(error instanceof ApiError&&error.code==='saldo_insuficiente'){
+        await openView('puntos');
+        report(error);
+      }else report(error);
+    }
+  }));
 }
 
 async function showTeam() {

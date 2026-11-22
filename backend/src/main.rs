@@ -8,12 +8,16 @@ use axum::{
 };
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use reqwest::Client;
 use ring::hmac;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::{env, sync::Arc};
+
+mod observability;
+use observability::{instrument_requests, record_business_event, record_document_event};
 
 #[derive(Clone)]
 struct App {
@@ -24,7 +28,9 @@ struct App {
     db_password: String,
     secret: String,
     proxy_secret: String,
+    metrics: PrometheusHandle,
 }
+
 fn clean_env_value(value: String) -> String {
     value.replace('\r', "")
 }
@@ -317,6 +323,7 @@ async fn ensure_points_for_pesaje(a: &App, pesaje: &Value) -> Result<Value, ()> 
         .await
         .map_err(|_| ())?;
     if write.status().is_success() {
+        record_business_event("points_credited");
         return write
             .json::<Value>()
             .await
@@ -427,8 +434,7 @@ async fn current_ledger_balance(a: &App, commerce_id: &str) -> Result<i64, ()> {
     let mut bookmark: Option<String> = None;
     let mut balance = 0_i64;
     loop {
-        let mut query =
-            json!({"selector":{"type":"movimiento_puntos","comercio_id":commerce_id},"limit":500});
+        let mut query = json!({"selector":{"type":"movimiento_puntos","comercio_id":commerce_id},"use_index":"idx_movements_commerce","limit":500});
         if let Some(cursor) = bookmark.as_deref() {
             query["bookmark"] = json!(cursor);
         }
@@ -473,7 +479,7 @@ async fn rewards(
     axum::Extension(c): axum::Extension<Claims>,
 ) -> Response {
     let response = proxy_request(a.http.post(format!("{}/{}/_find", a.couch, a.db)), &a, &c)
-        .json(&json!({"selector":{"type":"recompensa","activo":true},"limit":200}))
+        .json(&json!({"selector":{"type":"recompensa","activo":true},"use_index":"idx_rewards_active","limit":200}))
         .send()
         .await;
     let Ok(response) = response else {
@@ -580,6 +586,7 @@ async fn redeem_reward(
                     && doc.get("comercio_id").and_then(Value::as_str) == Some(commerce_id)
                     && doc.get("puntos").and_then(Value::as_i64) == Some(points)
                 {
+                    record_business_event("reward_redeem_retried");
                     return Json(json!({"ok":true,"movement_id":movement_id,"puntos":points,"recompensa":reward.get("nombre"),"idempotent":true})).into_response();
                 }
                 return domain_error(
@@ -596,12 +603,13 @@ async fn redeem_reward(
     match change_wallet(&a, commerce_id, &movement, -points).await {
         Ok(true) => {}
         Ok(false) => {
+            record_business_event("reward_redeem_insufficient_balance");
             return domain_error(
                 StatusCode::CONFLICT,
                 "saldo_insuficiente",
                 "El saldo disponible no alcanza para esta recompensa.",
                 &c,
-            )
+            );
         }
         Err(()) => return err(StatusCode::SERVICE_UNAVAILABLE),
     }
@@ -618,7 +626,10 @@ async fn redeem_reward(
         .send()
         .await;
     match put {
-        Ok(response) if response.status().is_success() => (StatusCode::CREATED, Json(json!({"ok":true,"movement_id":movement_id,"puntos":points,"recompensa":reward.get("nombre")}))).into_response(),
+        Ok(response) if response.status().is_success() => {
+            record_business_event("reward_redeemed");
+            (StatusCode::CREATED, Json(json!({"ok":true,"movement_id":movement_id,"puntos":points,"recompensa":reward.get("nombre")}))).into_response()
+        },
         Ok(response) if response.status().as_u16() == StatusCode::CONFLICT.as_u16() => Json(json!({"ok":true,"movement_id":movement_id,"puntos":points,"recompensa":reward.get("nombre"),"idempotent":true})).into_response(),
         _ => err(StatusCode::SERVICE_UNAVAILABLE),
     }
@@ -629,6 +640,7 @@ async fn reconcile_verified_pesajes(a: &App) -> Result<usize, ()> {
     loop {
         let mut query = json!({
             "selector": {"type":"pesaje","estado":"verificado"},
+            "use_index": "idx_weighings_state",
             "limit": 500,
             "fields": ["_id","_rev","type","estado","comercio_id","lineas","capturado_en","verificado_en"]
         });
@@ -712,7 +724,7 @@ async fn list_docs(
     ) {
         return err(StatusCode::BAD_REQUEST);
     }
-    let mut request = json!({"selector":{"type":kind},"limit":500,"fields":["_id","_rev","type","nombre","giro","zona","activo","creado_en","estado","solicitud_id","comercio_id","recolector_id","lineas","capturado_en","verificado_en","puntos","origen","concepto","fecha_solicitada","observaciones","creada_en","pesaje_id","regla_version"]});
+    let mut request = json!({"selector":{"type":kind},"use_index":"idx_document_type","limit":500,"fields":["_id","_rev","type","nombre","giro","zona","activo","creado_en","estado","solicitud_id","comercio_id","recolector_id","lineas","capturado_en","verificado_en","puntos","origen","concepto","fecha_solicitada","observaciones","creada_en","pesaje_id","regla_version"]});
     if let Some(bookmark) = q.get("bookmark").filter(|v| !v.is_empty()) {
         request["bookmark"] = json!(bookmark);
     }
@@ -803,7 +815,7 @@ async fn points_balance(
     let mut bookmark: Option<String> = None;
     let mut movements = Vec::new();
     loop {
-        let mut query = json!({"selector":{"type":"movimiento_puntos","comercio_id":comercio_id},"limit":500,"fields":["_id","_rev","type","comercio_id","origen","puntos","concepto","creado_en","pesaje_id","regla_version"]});
+        let mut query = json!({"selector":{"type":"movimiento_puntos","comercio_id":comercio_id},"use_index":"idx_movements_commerce","limit":500,"fields":["_id","_rev","type","comercio_id","origen","puntos","concepto","creado_en","pesaje_id","regla_version"]});
         if let Some(cursor) = bookmark.as_deref() {
             query["bookmark"] = json!(cursor)
         }
@@ -1098,15 +1110,15 @@ async fn validate_weighing(
             == Some("pendiente_verificacion")
     {
         let selector = if let Some(request_id) = d.get("solicitud_id").and_then(Value::as_str) {
-            json!({"type":"pesaje","solicitud_id":request_id,"estado":{"$ne":"rechazado"}})
+            json!({"type":"pesaje","solicitud_id":request_id})
         } else {
-            json!({"type":"pesaje","recolector_id":c.sub,"comercio_id":commerce,"solicitud_id":{"$exists":false},"capturado_en":{"$gte":(now-Duration::hours(1)).to_rfc3339()}})
+            json!({"type":"pesaje","recolector_id":c.sub,"comercio_id":commerce,"capturado_en":{"$gte":(now-Duration::hours(1)).to_rfc3339()}})
         };
         let response = a
             .http
             .post(format!("{}/{}/_find", a.couch, a.db))
             .basic_auth(&a.db_user, Some(&a.db_password))
-            .json(&json!({"selector":selector,"limit":100}))
+            .json(&json!({"selector":selector,"use_index":if d.get("solicitud_id").is_some() {"idx_weighings_request"} else {"idx_capture_window"},"limit":500}))
             .send()
             .await;
         let docs = match response {
@@ -1125,9 +1137,12 @@ async fn validate_weighing(
             }
         };
         let id = d.get("_id").and_then(Value::as_str).unwrap_or("");
-        if docs.iter().any(|v| {
-            v.get("_id").and_then(Value::as_str) != Some(id) && d.get("solicitud_id").is_some()
-        }) {
+        if d.get("solicitud_id").is_some()
+            && docs.iter().any(|v| {
+                v.get("_id").and_then(Value::as_str) != Some(id)
+                    && v.get("estado").and_then(Value::as_str) != Some("rechazado")
+            })
+        {
             return reject(
                 StatusCode::CONFLICT,
                 "pesaje_duplicado",
@@ -1137,7 +1152,10 @@ async fn validate_weighing(
         if d.get("solicitud_id").is_none()
             && docs
                 .iter()
-                .filter(|v| v.get("_id").and_then(Value::as_str) != Some(id))
+                .filter(|v| {
+                    v.get("_id").and_then(Value::as_str) != Some(id)
+                        && v.get("solicitud_id").is_none()
+                })
                 .count()
                 >= 8
         {
@@ -1283,7 +1301,7 @@ async fn put_doc(
             let request_id = d.get("_id").and_then(Value::as_str).unwrap_or("");
             let response = a.http.post(format!("{}/{}/_find", a.couch, a.db))
                 .basic_auth(&a.db_user, Some(&a.db_password))
-                .json(&json!({"selector":{"type":"pesaje","solicitud_id":request_id,"estado":"verificado"},"limit":1}))
+                .json(&json!({"selector":{"type":"pesaje","solicitud_id":request_id,"estado":"verificado"},"use_index":"idx_weighings_request","limit":1}))
                 .send().await;
             let Ok(response) = response else {
                 return err(StatusCode::SERVICE_UNAVAILABLE);
@@ -1377,6 +1395,7 @@ async fn put_doc(
         if verified && ensure_points_for_pesaje(&a, &d).await.is_err() {
             return err(StatusCode::SERVICE_UNAVAILABLE);
         }
+        record_document_event(&kind, d.get("estado").and_then(Value::as_str));
         return (
             StatusCode::CREATED,
             Json(json!({"ok":true,"rev":saved.get("rev"),"points_awarded":verified})),
@@ -1508,15 +1527,36 @@ async fn create_user(
         .await;
     match r {
         Ok(r) if r.status().is_success() => {
+            record_business_event("user_created");
             (StatusCode::CREATED, Json(json!({"ok":true}))).into_response()
         }
         Ok(r) if r.status().as_u16() == StatusCode::CONFLICT.as_u16() => err(StatusCode::CONFLICT),
         _ => err(StatusCode::SERVICE_UNAVAILABLE),
     }
 }
+
+async fn metrics_endpoint(State(a): State<Arc<App>>) -> Response {
+    (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        a.metrics.render(),
+    )
+        .into_response()
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt().json().init();
+    let metrics = PrometheusBuilder::new()
+        .set_buckets(&[
+            0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+        ])
+        .expect("Buckets Prometheus inválidos")
+        .install_recorder()
+        .expect("No se pudo instalar el recorder Prometheus");
     let required = |k: &str| {
         env::var(k)
             .map(clean_env_value)
@@ -1532,6 +1572,7 @@ async fn main() {
         db_password: required("COUCHDB_PASSWORD"),
         secret: required("JWT_SECRET"),
         proxy_secret: required("COUCHDB_PROXY_SECRET"),
+        metrics,
     });
     assert!(
         a.secret.len() >= 32 && a.proxy_secret.len() >= 32,
@@ -1563,9 +1604,11 @@ async fn main() {
         .route("/api/docs/:id", get(get_doc).put(put_doc))
         .layer(middleware::from_fn_with_state(a.clone(), auth));
     let app: Router<Arc<App>> = Router::new()
+        .route("/metrics", get(metrics_endpoint))
         .route("/salud", get(|| async { "ok" }))
         .route("/auth/login", post(login))
-        .merge(protected);
+        .merge(protected)
+        .layer(middleware::from_fn(instrument_requests));
     let app: Router = app.with_state(a.clone());
     let l = tokio::net::TcpListener::bind("0.0.0.0:8080")
         .await
