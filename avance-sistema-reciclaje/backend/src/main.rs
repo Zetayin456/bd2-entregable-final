@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 
@@ -45,6 +45,8 @@ struct AppState {
     jwt_secret: String,
     admin_user: String,
     admin_password: String,
+    recolector_user: String,
+    recolector_password: String,
 }
 
 // ========================
@@ -82,6 +84,178 @@ async fn obtener_documento(
 
     Ok((status, body))
 }
+
+
+ // ========================
+ // SINCRONIZACION OFFLINE
+ // ========================
+
+async fn sincronizar_documento(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(mut documento): Json<Value>,
+)-> Result<Json<Value>, (StatusCode, String)> {
+
+    if !id.starts_with("cola_")
+        || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Identificador de sincronizacion invalido".to_string(),
+        ));
+    }
+
+    if !documento.is_object() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "El documento debe ser un objeto JSON".to_string(),
+        ));
+    }
+
+    let tipo = documento.get("type_registro")
+    .and_then(Value::as_str)
+    .map(str::to_owned)
+    .ok_or((
+        StatusCode::BAD_REQUEST,
+        "Falta el tipo de registro".to_string(),
+    ))?;
+    
+
+    let tipo_documento = match tipo.as_str() {
+        "comercio" => "comercio",
+        "solicitud" => "solicitud",
+        "pesaje" => "pesaje",
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Tipo de registro no permitido".to_string(),
+            ));
+        }
+    };
+
+   match tipo.as_str() {
+        "solicitud" => {
+            for campo in ["comercio_id", "tipo_residuo", "direccion"] {
+                if documento.get(campo)
+                    .and_then(Value::as_str)
+                    .map(|v| v.trim().is_empty())
+                    .unwrap_or(true)
+                {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("El campo {} es obligatorio", campo),
+                    ));
+                }
+            }
+
+            let cantidad = documento.get("cantidad_aproximada")
+                .and_then(Value::as_f64);
+
+            if cantidad.map(|v| !v.is_finite() || v <= 0.0).unwrap_or(true) {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "La cantidad debe ser mayor que cero".to_string(),
+                ));
+            }
+        }
+
+        "pesaje" => {
+           for campo in ["solicitud_id", "comercio_id", "tipo_residuo"] {
+                if documento.get(campo)
+                    .and_then(Value::as_str)
+                    .map(|v| v.trim().is_empty())
+                    .unwrap_or(true)
+                {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("El campo {} es obligatorio", campo),
+                    ));
+                }
+            }
+
+            let peso = documento.get("peso_kg").and_then(Value::as_f64);
+
+            if peso.map(|v| !v.is_finite() || v <= 0.0).unwrap_or(true) {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "El peso debe ser mayor que cero".to_string(),
+                ));
+            }
+        }
+
+        _ => {}
+    }
+        if tipo_documento == "pesaje" {
+        let claims = validar_token(
+            &headers,
+            &state.jwt_secret,
+            &["recolector"],
+        )?;
+
+        documento["recolector_id"] = json!(claims.sub);
+    }
+
+    documento["_id"] = json!(id);
+    documento["sync_id"] = json!(id);
+    documento["type"] = json!(tipo_documento);
+
+    if tipo == "solicitud" {
+        documento["estado"] = json!("pendiente");
+    } else if tipo == "pesaje" {
+        documento["estado"] = json!("pendiente_verificacion");
+    }
+
+    let url = format!("{}/{}/{}", state.couch_url, state.database, id);
+
+    let response = state.client
+        .put(&url)
+        .basic_auth(&state.user, Some(&state.password))
+        .json(&documento)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+    let status = response.status();
+    let body = response.text().await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+    if status.is_success() {
+        let data: Value = serde_json::from_str(&body)
+            .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+        return Ok(Json(data));
+    }
+
+    if status == StatusCode::CONFLICT {
+        let (existing_status, existing_body) =
+            obtener_documento(&state, &id).await?;
+
+        if existing_status.is_success() {
+            let existing: Value = serde_json::from_str(&existing_body)
+                .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+            if existing.get("sync_id").and_then(Value::as_str) == Some(id.as_str())
+                && existing.get("type").and_then(Value::as_str) == Some(tipo_documento)
+            {
+                return Ok(Json(json!({
+                    "ok": true,
+                    "id": id,
+                    "duplicado": true,
+                    "mensaje": "El documento ya estaba sincronizado"
+                })));
+            }
+        }
+
+        return Err((
+            StatusCode::CONFLICT,
+            "El identificador ya existe con otro documento".to_string(),
+        ));
+    }
+
+    Err((StatusCode::BAD_GATEWAY, body))
+}
+
 
 // ========================
 // MODULO COMERCIOS
@@ -369,16 +543,19 @@ async fn obtener_solicitud(
 
 async fn crear_pesaje(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(mut pesaje): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    if !pesaje.is_object() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "El pesaje debe ser un objeto JSON".to_string(),
-        ));
-    }
 
-    for campo in ["solicitud_id", "comercio_id", "recolector_id", "tipo_residuo"] {
+    let claims = validar_token(
+        &headers,
+        &state.jwt_secret,
+        &["recolector"],
+    )?;
+
+    pesaje["recolector_id"] = json!(claims.sub);
+
+    for campo in ["solicitud_id", "comercio_id", "tipo_residuo"] {
         if pesaje.get(campo)
             .and_then(Value::as_str)
             .map(|v| v.trim().is_empty())
@@ -794,14 +971,21 @@ async fn login(
     State(state): State<AppState>,
     Json(credentials): Json<LoginRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    if credentials.usuario != state.admin_user
-        || credentials.contrasena != state.admin_password
+
+    let rol = if credentials.usuario == state.admin_user
+        && credentials.contrasena == state.admin_password
     {
+        "admin_plataforma"
+    } else if credentials.usuario == state.recolector_user
+        && credentials.contrasena == state.recolector_password
+    {
+        "recolector"
+    } else {
         return Err((
             StatusCode::UNAUTHORIZED,
             "Credenciales incorrectas".to_string(),
         ));
-    }
+    };
 
     let expiracion = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -811,7 +995,7 @@ async fn login(
 
     let claims = Claims {
         sub: credentials.usuario,
-        role: "admin_plataforma".to_string(),
+        role: rol.to_string(),
         exp: expiracion,
     };
 
@@ -835,9 +1019,10 @@ async fn login(
         "access_token": token,
         "token_type": "Bearer",
         "expires_in": 28800,
-        "rol": "admin_plataforma"
+        "rol": rol
     })))
 }
+    
 
 fn validar_token(
     headers: &HeaderMap,
@@ -916,11 +1101,17 @@ async fn main() {
 
         admin_password: env::var("AUTH_ADMIN_PASSWORD")
             .expect("Falta AUTH_ADMIN_PASSWORD en .env"),
+            recolector_user: env::var("AUTH_RECOLECTOR_USER")
+    .expect("Falta AUTH_RECOLECTOR_USER en .env"),
+
+recolector_password: env::var("AUTH_RECOLECTOR_PASSWORD")
+    .expect("Falta AUTH_RECOLECTOR_PASSWORD en .env"),
     };
 
     let app = Router::new()
         .route("/auth/login", post(login))
         .route("/salud", get(salud))
+        .route("/sincronizar/{id}", put(sincronizar_documento))
         .route(
             "/comercios",
             get(listar_comercios).post(crear_comercio),

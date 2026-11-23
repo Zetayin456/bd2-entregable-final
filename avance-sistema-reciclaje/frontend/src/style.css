@@ -140,3 +140,112 @@ td code { font-size: 9px; color: #77847b; }
   .section-heading { align-items: flex-start; }
   .section-heading h2 { font-size: 14px; }
 }
+
+/* ===== Mejoras visuales del formulario de solicitudes ===== */
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px 24px;
+  align-items: end;
+  margin-top: 24px;
+}
+
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+  color: #34443d;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.form-grid input,
+.form-grid select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 46px;
+  padding: 11px 13px;
+  border: 1px solid #d7e2db;
+  border-radius: 9px;
+  background: #fff;
+  color: #263b30;
+  font: inherit;
+  font-weight: 400;
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+
+.form-grid input:focus,
+.form-grid select:focus {
+  border-color: #24945d;
+  box-shadow: 0 0 0 3px rgba(36, 148, 93, .12);
+}
+
+.form-grid button {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0 23px;
+  border-radius: 9px;
+  margin-top: 2px;
+}
+
+.form-grid label:nth-child(3) {
+  grid-column: 1 / 2;
+}
+
+.form-grid label:nth-child(4) {
+  grid-column: 2 / 3;
+}
+
+.list-panel {
+  padding: 24px;
+  margin-bottom: 22px;
+}
+
+.list-panel .panel-heading {
+  margin-bottom: 20px;
+}
+
+.section-heading {
+  margin-bottom: 22px;
+}
+
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.commerce-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.commerce-table th,
+.commerce-table td {
+  padding: 15px 13px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+    gap: 17px;
+  }
+
+  .form-grid label:nth-child(3),
+  .form-grid label:nth-child(4) {
+    grid-column: auto;
+  }
+
+  .form-grid button {
+    width: 100%;
+  }
+
+  .list-panel {
+    padding: 17px;
+  }
+}
