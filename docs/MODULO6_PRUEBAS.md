@@ -5,7 +5,8 @@
 - `backend/src/main.rs` contiene pruebas unitarias para cálculo de puntos, materiales y límites, transiciones de solicitudes por rol e identidad del evento de verificación/id de movimiento determinista.
 - `tests/integration.mjs` ejecuta un flujo contra una instancia activa: inicio de sesión correcto e incorrecto, rutas protegidas, roles y alcance por comercio, listado y cambios incrementales para el cliente, flujo y transiciones de solicitud, asociación de pesajes, límites, duplicados, ráfagas, verificación y saldo/idempotencia de puntos.
 - El target `verify` de Docker corre las unitarias, `cargo check` y Clippy con warnings como errores.
-- `client-sim` queda inactivo por defecto. En modo `SIM_MODE=offline-sync` almacena documentos pendientes en PouchDB sin red, los sincroniza por la API y confirma su lectura remota. `load/reciclaje.js` sigue siendo una prueba k6 de disponibilidad HTTP (`/salud`), no una carga de rendimiento del flujo de negocio. El modo `netem` aplica latencia/pérdida de paquetes; no es una prueba automática de aceptación.
+- `client-sim` queda inactivo por defecto. En modo `SIM_MODE=offline-sync` almacena documentos pendientes en PouchDB sin hacer solicitudes, los reenvía al recuperar conectividad por la API y confirma su lectura remota.
+- `load/reciclaje.js` ejecuta el ciclo autenticado de solicitud, aprobación, asignación, pesaje, verificación, cierre y consulta de puntos. `scripts/run_experiment.ps1` guarda una observación k6 por corrida en `results/observations.csv`; el análisis requiere al menos tres corridas por condición. Estas herramientas permiten ejecutar el protocolo, pero no constituyen por sí mismas resultados experimentales.
 
 ## Requisitos y preparación
 
@@ -49,7 +50,7 @@ npm run build
 Set-Location ..
 ```
 
-Prueba k6 opcional, independiente de la suite de integración:
+Prueba k6 opcional del flujo autenticado de negocio, independiente de la suite de integración:
 
 ```powershell
 docker compose --profile load run --rm k6
@@ -69,7 +70,7 @@ Remove-Item Env:SIM_ADMIN_USER, Env:SIM_ADMIN_PASSWORD
 
 1. Abre `http://localhost:5173`, inicia sesión con una cuenta de comercio y crea una solicitud. Confirma en Network que `POST /auth/login`, `GET /api/changes` y `PUT /api/docs/<id>` llegan a la API sin enviar credenciales CouchDB desde el navegador.
 2. Desconecta temporalmente el navegador de la red, guarda un cambio local y confirma el estado pendiente. Reconecta, usa **Sincronizar** y confirma que el documento aparece en CouchDB/API y pasa a sincronizado.
-3. Repite con un pesaje inválido y confirma que la respuesta de API deja el motivo de rechazo visible en el registro y en el indicador de sincronización.
+3. Repite con un pesaje inválido y confirma que la respuesta de API deja el motivo visible como rechazado; ese documento no se reenvía automáticamente y debe corregirse antes de usar **Reintentar**.
 4. Inicia sesión con recolector y operador, registra y verifica un pesaje, y consulta el saldo de comercio. La suite Node automatiza el contrato HTTP y la acreditación; este recorrido comprueba además el cliente PouchDB real.
 
 ## Resultado y limitaciones

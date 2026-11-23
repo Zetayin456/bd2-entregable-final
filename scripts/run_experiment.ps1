@@ -4,6 +4,7 @@ param(
   [ValidateRange(1, 500)]
   [int]$Vus = 10,
   [string]$Duration = '2m',
+  [switch]$InjectOutage,
   [switch]$SkipQualityChecks
 )
 
@@ -11,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $resultsDirectory = Join-Path $repoRoot 'results'
 New-Item -ItemType Directory -Force -Path $resultsDirectory | Out-Null
-$runId = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$Profile-vus$Vus"
+$runId = "$(Get-Date -Format 'yyyyMMdd-HHmmss-fff')-$Profile-vus$Vus"
 $previousEnvironment = @{
   RUN_ID = $env:RUN_ID
   NETEM_PROFILE = $env:NETEM_PROFILE
@@ -73,16 +74,66 @@ try {
   Apply-Netem 'netem-api' $Profile
   $netemApplied = $true
   Apply-Netem 'netem-client' $Profile
+  $outageJob = $null
+  if ($InjectOutage) {
+    if ($Profile -eq 'corte') { throw 'Use -InjectOutage con ideal, degradado o intermitente; corte ya representa una desconexión completa.' }
+    $outageJob = Start-Job -ArgumentList $repoRoot,$Profile -ScriptBlock {
+      param($root,$restoreProfile)
+      Set-Location $root
+      Start-Sleep -Seconds 20
+      docker compose run --rm -e NETEM_PROFILE=corte netem-api
+      if ($LASTEXITCODE -ne 0) { throw 'No se pudo aplicar el corte temporal a la API.' }
+      docker compose run --rm -e NETEM_PROFILE=corte netem-client
+      if ($LASTEXITCODE -ne 0) { throw 'No se pudo aplicar el corte temporal al cliente.' }
+      Start-Sleep -Seconds 15
+      docker compose run --rm -e "NETEM_PROFILE=$restoreProfile" netem-api
+      if ($LASTEXITCODE -ne 0) { throw 'No se pudo restaurar el perfil de red de la API.' }
+      docker compose run --rm -e "NETEM_PROFILE=$restoreProfile" netem-client
+      if ($LASTEXITCODE -ne 0) { throw 'No se pudo restaurar el perfil de red del cliente.' }
+    }
+  }
   $startedAt = [DateTimeOffset]::UtcNow
   & docker compose --profile load run --rm k6
   $k6Exit = $LASTEXITCODE
   $endedAt = [DateTimeOffset]::UtcNow
+  if ($outageJob) {
+    Wait-Job $outageJob | Out-Null
+    Receive-Job $outageJob
+    Remove-Job $outageJob
+    $outageJob = $null
+  }
+
+  $k6SummaryPath = Join-Path $resultsDirectory "$runId-k6.json"
+  if (Test-Path $k6SummaryPath) {
+    $k6Summary = Get-Content -Raw $k6SummaryPath | ConvertFrom-Json
+    $httpMetrics = $k6Summary.metrics.http_reqs.values
+    $latencyMetrics = $k6Summary.metrics.http_req_duration.values
+    $summaryRow = [pscustomobject]@{
+      run_id = $runId
+      condition = "A1_${Profile}_vus${Vus}_$($Duration -replace '[^a-zA-Z0-9]', '')"
+      profile = $Profile
+      vus = $Vus
+      duration = $Duration
+      throughput_rps = $httpMetrics.rate
+      latency_avg_ms = $latencyMetrics.avg
+      latency_p95_ms = $latencyMetrics.'p(95)'
+      checks_passed = $k6Summary.metrics.checks.values.passes
+      checks_failed = $k6Summary.metrics.checks.values.fails
+      k6_exit_code = $k6Exit
+      started_at_utc = $startedAt.ToString('o')
+      ended_at_utc = $endedAt.ToString('o')
+    }
+    $summaryPath = Join-Path $resultsDirectory 'observations.csv'
+    if (Test-Path $summaryPath) { $summaryRow | Export-Csv -Path $summaryPath -Append -NoTypeInformation }
+    else { $summaryRow | Export-Csv -Path $summaryPath -NoTypeInformation }
+  }
 
   $startEpoch = $startedAt.ToUnixTimeSeconds()
   $endEpoch = $endedAt.ToUnixTimeSeconds()
   $queries = [ordered]@{
     api_request_rate = 'sum(rate(http_requests_total{route=~"/api/.*"}[1m]))'
-    api_request_p95_seconds = 'histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{route=~"/api/.*"}[1m])))'
+    api_request_rate_by_route = 'sum by (route) (rate(http_requests_total{route=~"/api/.*"}[1m]))'
+    api_request_p95_seconds_by_route = 'histogram_quantile(0.95, sum by (route, le) (rate(http_request_duration_seconds_bucket{route=~"/api/.*"}[1m])))'
     api_cpu_cores = 'sum(rate(container_cpu_usage_seconds_total{container_label_com_docker_compose_service="api"}[1m]))'
     api_memory_working_set_bytes = 'sum(container_memory_working_set_bytes{container_label_com_docker_compose_service="api"})'
     cadvisor_scrape_up = 'up{job="cadvisor"}'
@@ -108,8 +159,14 @@ try {
   Write-Host "Run ID: $runId"
   Write-Host "k6: $(Join-Path $resultsDirectory "$runId-k6.json")"
   Write-Host "Prometheus y cAdvisor: $metadataPath"
+  if (Test-Path (Join-Path $resultsDirectory 'observations.csv')) { Write-Host "Resumen acumulado: $(Join-Path $resultsDirectory 'observations.csv')" }
   if ($k6Exit -ne 0) { throw "k6 terminó con código $k6Exit; se conservaron los resultados para analizar la corrida." }
 } finally {
+  if ($outageJob) {
+    Wait-Job $outageJob | Out-Null
+    Receive-Job $outageJob -ErrorAction SilentlyContinue
+    Remove-Job $outageJob -Force -ErrorAction SilentlyContinue
+  }
   if ($netemApplied) {
     try { Apply-Netem 'netem-api' 'clear' } catch { Write-Warning 'No se pudo limpiar netem-api; ejecuta docker compose run --rm -e NETEM_PROFILE=clear netem-api.' }
     try { Apply-Netem 'netem-client' 'clear' } catch { Write-Warning 'No se pudo limpiar netem-client; ejecuta docker compose run --rm -e NETEM_PROFILE=clear netem-client.' }

@@ -133,6 +133,11 @@ export default function (users) {
   }, 201, 'verificar_pesaje');
   if (!verified || verified.points_awarded !== true) { businessFlowSuccess.add(false); return; }
 
+  const closed = save(users.operatorToken, {
+    ...requestDoc, _rev: assigned.rev, estado: 'completada', recolector_id: users.collectorName,
+  }, 201, 'cerrar_recoleccion');
+  if (!closed) { businessFlowSuccess.add(false); return; }
+
   const balancePath = `/api/points/balance?comercio_id=${encodeURIComponent(commerceId)}`;
   const balanceResponse = request('GET', balancePath, null, users.operatorToken, 200, 'consultar_puntos');
   const balance = balanceResponse.status === 200 ? json(balanceResponse) : null;
@@ -140,7 +145,7 @@ export default function (users) {
   check(balance || {}, { 'saldo acredita los puntos del pesaje': result => result.saldo === 50 });
   businessFlowSuccess.add(balanceOk);
   if (balanceOk) {
-    completedFlows.add(1, { flow: 'solicitud_pesaje_verificacion_puntos' });
-    businessFlowDuration.add(Date.now() - started, { flow: 'solicitud_pesaje_verificacion_puntos' });
+    completedFlows.add(1, { flow: 'solicitud_pesaje_cierre_verificacion_puntos' });
+    businessFlowDuration.add(Date.now() - started, { flow: 'solicitud_pesaje_cierre_verificacion_puntos' });
   }
 }

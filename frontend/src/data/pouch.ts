@@ -5,13 +5,13 @@ import type { Documento, TipoDocumento } from '../domain/tipos';
 export type EstadoSync = 'connected' | 'offline' | 'pending' | 'syncing' | 'error';
 export type DocumentoLocal<T extends Documento = Documento> = T & {
   remote_rev?: string;
-  sync_status?: 'pending' | 'synced' | 'conflict';
+  sync_status?: 'pending' | 'synced' | 'conflict' | 'rejected';
   local_modified_at?: string;
   sync_error?: string;
   conflict_remote?: DocumentoLocal;
 };
 type PersistedLocal = DocumentoLocal & { _rev: string };
-export interface SyncSnapshot { state: EstadoSync; pending: number; conflicts: number; lastSync?: string; message: string }
+export interface SyncSnapshot { state: EstadoSync; pending: number; conflicts: number; rejected: number; lastSync?: string; message: string }
 
 const localDbName = () => {
   if(sesion.role==='admin_plataforma')return 'sistema_reciclaje_local';
@@ -23,7 +23,7 @@ let activeDbName=localDbName();
 export let db = new PouchDB<DocumentoLocal>(activeDbName);
 const listeners = new Set<(snapshot: SyncSnapshot) => void>();
 let running: Promise<void> | null = null;
-let snapshot: SyncSnapshot = { state: !navigator.onLine ? 'offline' : sesion.token ? 'connected' : 'pending', pending: 0, conflicts: 0, message: !navigator.onLine ? 'Sin conexión' : sesion.token ? 'Conectado' : 'Inicia sesión para sincronizar' };
+let snapshot: SyncSnapshot = { state: !navigator.onLine ? 'offline' : sesion.token ? 'connected' : 'pending', pending: 0, conflicts: 0, rejected: 0, message: !navigator.onLine ? 'Sin conexión' : sesion.token ? 'Conectado' : 'Inicia sesión para sincronizar' };
 let timer: number | undefined;
 let onlineHandlersInstalled = false;
 
@@ -43,7 +43,7 @@ async function allLocal() {
 }
 async function refreshCounts() {
   const docs = await allLocal();
-  snapshot = { ...snapshot, pending: docs.filter(d => d.sync_status === 'pending').length, conflicts: docs.filter(d => d.sync_status === 'conflict').length };
+  snapshot = { ...snapshot, pending: docs.filter(d => d.sync_status === 'pending').length, conflicts: docs.filter(d => d.sync_status === 'conflict').length, rejected: docs.filter(d => d.sync_status === 'rejected').length };
   publish();
 }
 function publish() { for (const listener of listeners) listener({ ...snapshot }); }
@@ -84,7 +84,7 @@ async function putRemote(local: DocumentoLocal): Promise<void> {
     }
     if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
       const current = await db.get(local._id).catch(() => undefined);
-      if (current) await db.put(defined({ ...current, sync_error: error.message }));
+      if (current) await db.put(defined({ ...current, sync_status: 'rejected' as const, sync_error: error.message }));
     }
     throw error;
   }
@@ -129,7 +129,7 @@ async function pullChanges() {
       if(remote._deleted){if(existing&&existing.sync_status==='synced')await db.remove(existing);continue;}
       if(!('type' in remote))continue;
       const incoming=toLocal(remote as Documento);
-      if(existing?.sync_status==='pending'||existing?.sync_status==='conflict')continue;
+      if(existing?.sync_status==='pending'||existing?.sync_status==='conflict'||existing?.sync_status==='rejected')continue;
       if(existing?.remote_rev===incoming.remote_rev)continue;
       await db.put({ ...existing, ...incoming, ...(existing?._rev?{_rev:existing._rev}:{}) });
     }

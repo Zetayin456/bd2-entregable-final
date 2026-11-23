@@ -16,7 +16,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::{env, sync::Arc};
 
+mod domain;
 mod observability;
+use domain::{calculate_points_with_rules, movement_id};
 use observability::{instrument_requests, record_business_event, record_document_event};
 
 #[derive(Clone)]
@@ -216,9 +218,6 @@ fn proxy_request(request: reqwest::RequestBuilder, a: &App, c: &Claims) -> reqwe
             couch_proxy_token(&a.proxy_secret, &c.sub),
         )
 }
-fn movement_id(pesaje_id: &str) -> String {
-    format!("movimiento_puntos:pesaje:{pesaje_id}")
-}
 async fn couch_get(a: &App, id: &str) -> Result<reqwest::Response, ()> {
     a.http
         .get(format!("{}/{}/{}", a.couch, a.db, urlencoding::encode(id)))
@@ -234,48 +233,6 @@ async fn calculate_points(a: &App, pesaje: &Value) -> Result<(i64, Value), ()> {
     }
     let rules = rules_response.json::<Value>().await.map_err(|_| ())?;
     calculate_points_with_rules(pesaje, &rules)
-}
-fn calculate_points_with_rules(pesaje: &Value, rules: &Value) -> Result<(i64, Value), ()> {
-    let rates = rules
-        .get("puntos_por_kg")
-        .and_then(Value::as_object)
-        .ok_or(())?;
-    let lines = pesaje
-        .get("lineas")
-        .and_then(Value::as_array)
-        .filter(|v| !v.is_empty())
-        .ok_or(())?;
-    if lines.len() > 10 {
-        return Err(());
-    }
-    let mut total = 0.0_f64;
-    for line in lines {
-        let material = line
-            .get("material")
-            .and_then(Value::as_str)
-            .map(|v| v.trim().to_lowercase())
-            .filter(|v| !v.is_empty())
-            .ok_or(())?;
-        let weight = line
-            .get("peso_kg")
-            .and_then(Value::as_f64)
-            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1_000.0)
-            .ok_or(())?;
-        let rate = rates
-            .get(&material)
-            .and_then(Value::as_f64)
-            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1_000_000.0)
-            .ok_or(())?;
-        total += weight * rate;
-    }
-    if !total.is_finite() || total > 2_000.0 || total > i64::MAX as f64 {
-        return Err(());
-    }
-    let points = total.round() as i64;
-    if points <= 0 {
-        return Err(());
-    }
-    Ok((points, rules.clone()))
 }
 async fn ensure_points_for_pesaje(a: &App, pesaje: &Value) -> Result<Value, ()> {
     let pesaje_id = pesaje.get("_id").and_then(Value::as_str).ok_or(())?;
@@ -1063,11 +1020,12 @@ async fn validate_weighing(
                 "El pesaje debe corresponder al comercio de una solicitud aprobada o asignada.",
             );
         }
+        // A collector may capture a weighing only after operations assigns the
+        // request to that exact account. An approved-but-unassigned request is
+        // not sufficient authorization.
         if c.role == "recolector"
-            && request
-                .get("recolector_id")
-                .and_then(Value::as_str)
-                .is_some_and(|id| id != c.sub)
+            && (request.get("estado").and_then(Value::as_str) != Some("asignada")
+                || request.get("recolector_id").and_then(Value::as_str) != Some(c.sub.as_str()))
         {
             return reject(
                 StatusCode::FORBIDDEN,

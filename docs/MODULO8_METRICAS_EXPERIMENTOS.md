@@ -29,13 +29,22 @@ Invoke-RestMethod http://localhost:9090/targets
 
 El script ejecuta el target Docker `verify` (unitarias, `cargo check` y `cargo clippy`), confirma que Prometheus scrapea la API, instala netem en las interfaces de salida de API y cliente k6, ejecuta la carga, consulta Prometheus y limpia las reglas de red incluso si k6 falla. `-SkipQualityChecks` permite repetir corridas sin reconstruir las verificaciones estáticas una vez que pasaron.
 
-Cada corrida produce `results/<run-id>-k6.json` y `results/<run-id>-prometheus.json`. Prometheus conserva la serie temporal en el volumen `prometheus_data`; el JSON registra el perfil, carga, duración, fechas y resultados de queries de tasa HTTP, p95 de latencia, CPU, memoria y `up` de cAdvisor.
+Cada corrida produce `results/<run-id>-k6.json`, `results/<run-id>-prometheus.json` y una fila acumulada en `results/observations.csv`. Prometheus conserva la serie temporal en el volumen `prometheus_data`; el JSON registra el perfil, carga, duración, fechas y resultados de queries de tasa HTTP, p95 de latencia, CPU, memoria y `up` de cAdvisor. El CSV registra throughput HTTP total, latencia k6 promedio/p95 y checks; su fila es una corrida y debe mantenerse independiente por repetición.
+
+Después de al menos tres corridas por condición experimental:
+
+```powershell
+python analysis/analizar.py results/observations.csv --output results/analysis.json
+```
+
+El analizador calcula descriptivos, evalúa normalidad Shapiro-Wilk, selecciona ANOVA de una vía o Kruskal-Wallis, realiza comparaciones por pares con ajuste Holm y reporta delta de Cliff. No genera observaciones ni declara hipótesis como aceptadas cuando no existen datos suficientes. Las comparaciones deben usar el mismo nivel (API con API) y no mezclar resultados pgbench con throughput HTTP.
 
 Parámetros útiles:
 
 ```powershell
 .\scripts\run_experiment.ps1 -Profile ideal -Vus 1 -Duration 1m
 .\scripts\run_experiment.ps1 -Profile intermitente -Vus 25 -Duration 5m -SkipQualityChecks
+.\scripts\run_experiment.ps1 -Profile degradado -Vus 10 -Duration 2m -InjectOutage
 docker build --target verify -t reciclaje-backend-verify ./backend
 ```
 

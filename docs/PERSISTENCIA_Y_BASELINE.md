@@ -28,7 +28,7 @@ Confirme en `_explain` que `index.ddoc` y `index.name` señalan el índice esper
 
 ## Decisión de modularización Rust
 
-`main.rs` concentraba rutas, validaciones, acceso a CouchDB y métricas. Se extrajo la instrumentación de rutas y eventos a `observability.rs`, preservando nombres de métricas, etiquetas y comportamiento HTTP. Esta extracción pequeña prueba una frontera de módulo con bajo riesgo. Conviene continuar por etapas: primero utilidades de CouchDB, luego reglas de dominio (puntos/pesajes/solicitudes), y finalmente handlers; cada paso debe conservar los contratos JSON y la integración `tests/integration.mjs`. No conviene reescribir todo el archivo en una sola operación.
+`main.rs` concentra rutas, autenticación y acceso a CouchDB. La instrumentación está en `observability.rs`; las reglas puras de cálculo de puntos y creación de identificadores idempotentes están en `domain.rs`. Se preservan contratos JSON y handlers. La separación de acceso a datos, autorización y handlers continúa pendiente y debe hacerse por etapas, conservando `tests/integration.mjs`.
 
 ## Baseline relacional reproducible
 
@@ -48,3 +48,11 @@ docker compose --profile baseline --profile baseline-bench run --rm baseline-ben
 ```
 
 Los archivos `results/<RUN_ID>-pgbench.txt` y `results/<RUN_ID>-txn.*` contienen el resumen y registros por transacción. Para repetir con latencia simulada, aplique un perfil `netem` antes de la corrida y use exactamente el mismo perfil al medir la API CouchDB.
+
+## Análisis de observaciones
+
+`scripts/run_experiment.ps1` agrega una fila a `results/observations.csv` después de cada corrida k6, con throughput, latencia media/p95, checks, perfil, VUs y marcas de tiempo. Ejecute `python analysis/analizar.py results/observations.csv` después de recolectar al menos tres corridas independientes por cada condición. El analizador no crea datos sintéticos y falla si el CSV no tiene las columnas requeridas o no alcanza el mínimo de replicación. Las filas del baseline pgbench no deben mezclarse con las del API: miden capas distintas.
+
+Para inyectar 15 segundos de corte total a los 20 segundos del ensayo y restaurar después el perfil base: `.\scripts\run_experiment.ps1 -Profile degradado -Vus 10 -Duration 2m -InjectOutage`. Este switch requiere una duración que cubra la ventana de interrupción y reconexión; el runner limpia ambas interfaces al terminar.
+
+Para verificar cola local y sincronización real a través del backend, inicie el stack y ejecute una instancia desechable del simulador: `docker compose run --rm -e SIM_MODE=offline-sync -e SIM_ADMIN_USER=$env:BOOTSTRAP_ADMIN_USER -e SIM_ADMIN_PASSWORD=$env:BOOTSTRAP_ADMIN_PASSWORD client-sim`. El simulador primero crea documentos únicamente en PouchDB, luego los reenvía por la API y confirma su lectura remota. Los documentos remotos de simulación tienen IDs únicos y quedan en CouchDB para inspección.
