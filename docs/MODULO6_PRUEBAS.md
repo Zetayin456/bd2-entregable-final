@@ -8,6 +8,8 @@
 - `client-sim` queda inactivo por defecto. En modo `SIM_MODE=offline-sync` almacena documentos pendientes en PouchDB sin hacer solicitudes, los reenvía al recuperar conectividad por la API y confirma su lectura remota.
 - `load/reciclaje.js` ejecuta el ciclo autenticado de solicitud, aprobación, asignación, pesaje, verificación, cierre y consulta de puntos. `scripts/run_experiment.ps1` guarda una observación k6 por corrida en `results/observations.csv`; el análisis requiere al menos tres corridas por condición. Estas herramientas permiten ejecutar el protocolo, pero no constituyen por sí mismas resultados experimentales.
 
+El almacenamiento del JWT, los datos PouchDB/IndexedDB, la persistencia del navegador y la ausencia de cifrado local están auditados en [Privacidad y almacenamiento local](PRIVACIDAD_Y_ALMACENAMIENTO_LOCAL.md). No se deben tratar los datos locales como cifrados ni considerar el cierre de sesión como borrado de la cola offline.
+
 ## Requisitos y preparación
 
 Docker Desktop con el motor Linux iniciado; Node.js 18 o posterior; en Windows, PowerShell 7 es opcional. `.env` debe definir `COUCHDB_USER`, `COUCHDB_PASSWORD`, `COUCHDB_PROXY_SECRET`, `JWT_SECRET`, `BOOTSTRAP_ADMIN_USER` y `BOOTSTRAP_ADMIN_PASSWORD`. Los secretos de aplicación deben ser locales y no se imprimen ni se incluyen en la suite. La inicialización de CouchDB usa esos valores y `couchdb/lab.ini` ya no declara una cuenta administrativa fija.

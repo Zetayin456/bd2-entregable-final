@@ -81,6 +81,8 @@ services:
     environment:
       API_URL: http://api:8080
       SIM_CLIENTS: 100
+      SIM_ADMIN_USER: ${BOOTSTRAP_ADMIN_USER:?Define BOOTSTRAP_ADMIN_USER en .env}
+      SIM_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?Define BOOTSTRAP_ADMIN_PASSWORD en .env}
     depends_on: [api]
     networks: [edge_net]
 

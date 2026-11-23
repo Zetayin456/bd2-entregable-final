@@ -8,7 +8,13 @@ La ruta pública `GET /metrics` expone el formato de Prometheus. El middleware i
 - `http_request_duration_seconds{method,route}`: histograma con buckets configurados entre 5 ms y 10 s.
 - `business_events_total{event}`: usuarios creados, comercios, etapas de solicitud, pesajes capturados/verificados, créditos, canjes exitosos, reintentos de canje y rechazos por saldo insuficiente.
 
-Prometheus scrapea `api:8080/metrics` y `cadvisor:8080`, persiste sus series en el volumen `prometheus_data` y publica su interfaz en `http://localhost:9090`. cAdvisor proporciona CPU y memoria por contenedor.
+Prometheus scrapea `api:8080/metrics` y `cadvisor:8080`, persiste sus series en el volumen `prometheus_data` y publica su interfaz en `http://localhost:9090`. cAdvisor expone contadores de CPU y working set de memoria en el entorno observado. La atribución por contenedor depende de que cAdvisor exporte etiquetas Docker/Compose para cada contenedor; no debe darse por supuesta.
+
+### Alcance comprobado de CPU, RAM e hilos
+
+En la configuración, `scripts/run_experiment.ps1` consulta `container_cpu_usage_seconds_total` y `container_memory_working_set_bytes` filtrando `container_label_com_docker_compose_service="api"`. Sin embargo, los JSON experimentales guardados inspeccionados tienen `data.result=[]` para ambas consultas. Por tanto, **las corridas archivadas no contienen mediciones válidas atribuibles al contenedor API** y no deben usarse para afirmar CPU/RAM del backend. Sí se confirmó en el Prometheus activo que cAdvisor expone series de CPU y working set de memoria para cgroups agregados del host/Docker (por ejemplo, `id="/docker"`); esas series no incluyen etiquetas de servicio Compose y no permiten atribuir el consumo al API. Son una comprobación de disponibilidad de telemetría a nivel agregado, no un resultado experimental por API.
+
+Ni el middleware de métricas del backend ni las consultas guardadas instrumentan o recogen cantidad de hilos del proceso. La consulta directa a `container_threads` tampoco devolvió series en el entorno inspeccionado. En consecuencia, el uso de hilos queda **sin medir**; no se estima ni se infiere desde CPU, concurrencia, VUs o configuración del runtime. Para cerrar esta métrica habría que añadir una fuente verificable de conteo de threads del proceso API y persistirla en cada corrida.
 
 ## Flujo de k6
 
@@ -29,7 +35,7 @@ Invoke-RestMethod http://localhost:9090/targets
 
 El script ejecuta el target Docker `verify` (unitarias, `cargo check` y `cargo clippy`), confirma que Prometheus scrapea la API, instala netem en las interfaces de salida de API y cliente k6, ejecuta la carga, consulta Prometheus y limpia las reglas de red incluso si k6 falla. `-SkipQualityChecks` permite repetir corridas sin reconstruir las verificaciones estáticas una vez que pasaron.
 
-Cada corrida produce `results/<run-id>-k6.json`, `results/<run-id>-prometheus.json` y una fila acumulada en `results/observations.csv`. Prometheus conserva la serie temporal en el volumen `prometheus_data`; el JSON registra el perfil, carga, duración, fechas y resultados de queries de tasa HTTP, p95 de latencia, CPU, memoria y `up` de cAdvisor. El CSV registra throughput HTTP total, latencia k6 promedio/p95 y checks; su fila es una corrida y debe mantenerse independiente por repetición.
+Cada corrida produce `results/<run-id>-k6.json`, `results/<run-id>-prometheus.json` y una fila acumulada en `results/observations.csv`. Prometheus conserva la serie temporal en el volumen `prometheus_data`; el JSON guarda el perfil, carga, duración, fechas y respuestas de consultas HTTP, latencia, CPU, memoria y `up` de cAdvisor. Una respuesta Prometheus con `status=success` pero `data.result=[]` es una consulta sin muestras, no una medición igual a cero. En las observaciones revisadas, las consultas CPU/RAM filtradas al servicio `api` quedaron vacías; consúltese el apartado anterior y no se reporten como métricas medidas del API. El CSV registra throughput HTTP total, latencia k6 promedio/p95 y checks; no contiene CPU, RAM ni hilos.
 
 Después de al menos tres corridas por condición experimental:
 
@@ -38,6 +44,8 @@ python analysis/analizar.py results/observations.csv --output results/analysis.j
 ```
 
 El analizador calcula descriptivos, evalúa normalidad Shapiro-Wilk, selecciona ANOVA de una vía o Kruskal-Wallis, realiza comparaciones por pares con ajuste Holm y reporta delta de Cliff. No genera observaciones ni declara hipótesis como aceptadas cuando no existen datos suficientes. Las comparaciones deben usar el mismo nivel (API con API) y no mezclar resultados pgbench con throughput HTTP.
+
+El baseline PostgreSQL/`pgbench` es exclusivamente una carga de persistencia SQL (upsert y lectura indexada sobre `baseline_documents`). No es un backend API alternativo: no reproduce autenticación/RBAC, reglas de negocio, transiciones ni cliente HTTP. La salida k6 representa el flujo autenticado de la API Rust+CouchDB; PouchDB participa en el cliente para la cola offline. El analizador estadístico trabaja solo sobre las condiciones k6 y deja explícito que no realiza contraste inferencial PostgreSQL-versus-API. Los datos permiten describir persistencia frente al comportamiento de la arquitectura completa, pero no sostienen una afirmación de superioridad entre APIs equivalentes ni aíslan causalmente el motor de base de datos.
 
 Parámetros útiles:
 

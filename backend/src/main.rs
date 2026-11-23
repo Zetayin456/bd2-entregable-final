@@ -1270,10 +1270,10 @@ async fn put_doc(
             let Ok(page) = response.json::<Value>().await else {
                 return err(StatusCode::BAD_GATEWAY);
             };
-            if !page
+            if page
                 .get("docs")
                 .and_then(Value::as_array)
-                .is_some_and(|docs| !docs.is_empty())
+                .is_none_or(|docs| docs.is_empty())
             {
                 return domain_error(
                     StatusCode::CONFLICT,

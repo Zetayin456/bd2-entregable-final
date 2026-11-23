@@ -1,0 +1,93 @@
+{
+  "input": "results\\observations.csv",
+  "analysis_scope": "Comparación estadística entre condiciones de carga del API Rust con CouchDB; no incluye observaciones pgbench.",
+  "baseline_scope": "PostgreSQL/pgbench mide operaciones SQL de persistencia (upsert y lectura indexada) sobre baseline_documents; no es una API alternativa ni incluye autenticación, autorización, reglas de negocio, orquestación Rust o cliente HTTP.",
+  "cross_system_comparison": "No realizada: las filas pgbench y las métricas k6 del API corresponden a capas y cargas distintas, por lo que no se mezclan ni se interpretan como comparación integral equivalente.",
+  "n_by_condition": {
+    "A1_ideal_vus10_1m": 3,
+    "A1_intermitente_vus10_1m": 3
+  },
+  "excluded_under_replicated_conditions": {},
+  "reliability_by_condition_all_runs": {
+    "A1_ideal_vus10_1m": {
+      "runs_total": 5,
+      "runs_error_free": 3,
+      "runs_excluded_from_throughput_test": 2,
+      "mean_business_flow_success_rate": 0.6832906224264604,
+      "mean_http_failure_rate": 0.12857989076338303
+    },
+    "A1_intermitente_vus10_1m": {
+      "runs_total": 3,
+      "runs_error_free": 3,
+      "runs_excluded_from_throughput_test": 0,
+      "mean_business_flow_success_rate": 1.0,
+      "mean_http_failure_rate": 0.0
+    },
+    "A1_ideal_vus1_45s": {
+      "runs_total": 1,
+      "runs_error_free": 0,
+      "runs_excluded_from_throughput_test": 1,
+      "mean_business_flow_success_rate": 0.9473684210526315,
+      "mean_http_failure_rate": 0.006493506493506494
+    },
+    "A1_degradado_vus1_45s_outage": {
+      "runs_total": 1,
+      "runs_error_free": 0,
+      "runs_excluded_from_throughput_test": 1,
+      "mean_business_flow_success_rate": 0.8333333333333334,
+      "mean_http_failure_rate": 0.0196078431372549
+    }
+  },
+  "throughput_inference_sample": "Solo corridas con 100% de flujos de negocio exitosos y 0% de fallos HTTP.",
+  "descriptive": {
+    "A1_ideal_vus10_1m": {
+      "mean_rps": 38.987777371348756,
+      "median_rps": 40.17323821495622,
+      "sd_rps": 4.177231564442806,
+      "min_rps": 34.34593896331121,
+      "max_rps": 42.444154935778826
+    },
+    "A1_intermitente_vus10_1m": {
+      "mean_rps": 9.273662350783484,
+      "median_rps": 9.49035687301212,
+      "sd_rps": 0.5473663449346157,
+      "min_rps": 8.65112394953336,
+      "max_rps": 9.679506229804968
+    }
+  },
+  "normality_shapiro": {
+    "A1_ideal_vus10_1m": {
+      "W": 0.9395969889388776,
+      "p_value": 0.5257547633419268,
+      "normal_at_0_05": true
+    },
+    "A1_intermitente_vus10_1m": {
+      "W": 0.8824558696388071,
+      "p_value": 0.33165234316606684,
+      "normal_at_0_05": true
+    }
+  },
+  "omnibus": {
+    "test": "one-way ANOVA",
+    "statistic": 149.23684596393323,
+    "p_value": 0.00025777650247406646
+  },
+  "post_hoc": [
+    {
+      "left": "A1_ideal_vus10_1m",
+      "right": "A1_intermitente_vus10_1m",
+      "test": "Welch t",
+      "statistic": 12.216253352150744,
+      "p_raw": 0.005843022109282424,
+      "cliffs_delta": 1.0,
+      "median_difference_ci_95_bootstrap": [
+        24.666432733506245,
+        33.79303098624547
+      ],
+      "p_holm": 0.005843022109282424,
+      "reject_equal_at_0_05": true
+    }
+  ],
+  "alpha": 0.05,
+  "interpretation": "Las pruebas inferenciales comparan únicamente throughput k6 entre condiciones del API Rust+CouchDB con flujos válidos. PostgreSQL/pgbench es una referencia separada de persistencia SQL, no una comparación de API completa. Rechazar H0 solo para comparaciones con p de Holm < 0.05 e interpretar tamaño del efecto y diseño junto con el valor p."
+}

@@ -1,0 +1,267 @@
+{
+    "root_group": {
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {
+            "setup": {
+                "name": "setup",
+                "path": "::setup",
+                "id": "5c0f8025f7e0b6654089e5b00e950f1a",
+                "groups": {},
+                "checks": {
+                        "login_administrador": {
+                            "id": "55293e7e096eea5a4159dcac85a05696",
+                            "passes": 1,
+                            "fails": 0,
+                            "name": "login_administrador",
+                            "path": "::setup::login_administrador"
+                        },
+                        "crear_operador_acopio": {
+                            "id": "f19b61a48c68727f3d22505c0a59712e",
+                            "passes": 1,
+                            "fails": 0,
+                            "name": "crear_operador_acopio",
+                            "path": "::setup::crear_operador_acopio"
+                        },
+                        "crear_recolector": {
+                            "name": "crear_recolector",
+                            "path": "::setup::crear_recolector",
+                            "id": "c4dc568c602df1ff6567fa7112fd48a6",
+                            "passes": 1,
+                            "fails": 0
+                        },
+                        "login_operador": {
+                            "passes": 1,
+                            "fails": 0,
+                            "name": "login_operador",
+                            "path": "::setup::login_operador",
+                            "id": "5a88afe8cfa794d0b810a7bdd22d16ad"
+                        },
+                        "login_recolector": {
+                            "name": "login_recolector",
+                            "path": "::setup::login_recolector",
+                            "id": "e391c81feb1fe4663f3e3af67360f400",
+                            "passes": 1,
+                            "fails": 0
+                        }
+                    }
+            }
+        },
+        "checks": {
+            "registrar_comercio": {
+                "id": "53ddf1e2065edffdb3e533a46e6b1742",
+                "passes": 232,
+                "fails": 1,
+                "name": "registrar_comercio",
+                "path": "::registrar_comercio"
+            },
+            "crear_solicitud": {
+                "passes": 230,
+                "fails": 2,
+                "name": "crear_solicitud",
+                "path": "::crear_solicitud",
+                "id": "d563e1a0d22ed63a591c406592ce61ec"
+            },
+            "aprobar_solicitud": {
+                "passes": 230,
+                "fails": 0,
+                "name": "aprobar_solicitud",
+                "path": "::aprobar_solicitud",
+                "id": "223e07d3e66bc759aa47c61231240b0c"
+            },
+            "asignar_recolector": {
+                "fails": 0,
+                "name": "asignar_recolector",
+                "path": "::asignar_recolector",
+                "id": "ce7c51effea3929dd3b900ee8ba7c505",
+                "passes": 230
+            },
+            "registrar_pesaje": {
+                "name": "registrar_pesaje",
+                "path": "::registrar_pesaje",
+                "id": "bb70bae8fb79030b396fe601e39390b2",
+                "passes": 230,
+                "fails": 0
+            },
+            "verificar_pesaje": {
+                "name": "verificar_pesaje",
+                "path": "::verificar_pesaje",
+                "id": "19d575f89aef50248f52655c9dfe662c",
+                "passes": 227,
+                "fails": 3
+            },
+            "cerrar_recoleccion": {
+                "passes": 224,
+                "fails": 3,
+                "name": "cerrar_recoleccion",
+                "path": "::cerrar_recoleccion",
+                "id": "07d0a661c4a3a1e91bc2f961b10fbcc1"
+            },
+            "consultar_puntos": {
+                "name": "consultar_puntos",
+                "path": "::consultar_puntos",
+                "id": "ace7af033cd418840002b6aaa966e13d",
+                "passes": 223,
+                "fails": 1
+            },
+            "saldo acredita los puntos del pesaje": {
+                "name": "saldo acredita los puntos del pesaje",
+                "path": "::saldo acredita los puntos del pesaje",
+                "id": "43e40c0fa326f98e3b537c4ab4ea4b18",
+                "passes": 223,
+                "fails": 1
+            }
+        },
+        "name": ""
+    },
+    "metrics": {
+        "http_req_sending": {
+            "avg": 0.07091479630635526,
+            "min": 0.010699,
+            "med": 0.046781,
+            "max": 6.033993,
+            "p(90)": 0.106224,
+            "p(95)": 0.147128
+        },
+        "data_received": {
+            "count": 462729,
+            "rate": 3669.8506438626364
+        },
+        "http_req_blocked": {
+            "avg": 1.293130171102658,
+            "min": 0.00158,
+            "med": 0.006014,
+            "max": 1078.033765,
+            "p(90)": 0.011685,
+            "p(95)": 0.015433
+        },
+        "business_step_duration_ms": {
+            "avg": 669.11515480717,
+            "min": 109,
+            "med": 363,
+            "max": 29998,
+            "p(90)": 1179,
+            "p(95)": 1394
+        },
+        "vus": {
+            "value": 1,
+            "min": 0,
+            "max": 10
+        },
+        "http_req_failed": {
+            "passes": 10,
+            "fails": 1831,
+            "value": 0.005431830526887561
+        },
+        "data_sent": {
+            "count": 1462459,
+            "rate": 11598.59464778025
+        },
+        "iteration_duration": {
+            "p(95)": 6070.880627449999,
+            "avg": 5267.892774465814,
+            "min": 1135.709368,
+            "med": 3816.9575139999997,
+            "max": 33294.754874,
+            "p(90)": 5506.6294301
+        },
+        "http_req_waiting": {
+            "avg": 667.2852182542093,
+            "min": 108.663683,
+            "med": 359.673152,
+            "max": 29997.433651,
+            "p(90)": 1178.113009,
+            "p(95)": 1393.313659
+        },
+        "business_steps_total": {
+            "count": 1831,
+            "rate": 14.52145106296015
+        },
+        "business_flow_duration_ms": {
+            "p(95)": 5614.5,
+            "avg": 4098.856502242153,
+            "min": 3234,
+            "med": 3792,
+            "max": 6176,
+            "p(90)": 5338.6
+        },
+        "iterations": {
+            "rate": 1.8478962849097296,
+            "count": 233
+        },
+        "http_req_duration": {
+            "avg": 667.5379636349809,
+            "min": 108.709907,
+            "med": 359.818409,
+            "max": 29997.454335,
+            "p(90)": 1178.273142,
+            "p(95)": 1393.647842
+        },
+        "http_req_duration{expected_response:true}": {
+            "p(90)": 1169.999904,
+            "p(95)": 1324.557096,
+            "avg": 507.3566026941562,
+            "min": 108.709907,
+            "med": 358.588401,
+            "max": 2797.436023
+        },
+        "http_req_tls_handshaking": {
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "max": 0,
+            "p(90)": 0,
+            "p(95)": 0
+        },
+        "business_flows_completed_total": {
+            "count": 223,
+            "rate": 1.7685874314801273
+        },
+        "http_req_receiving": {
+            "max": 4.817292,
+            "p(90)": 0.271774,
+            "p(95)": 0.416641,
+            "avg": 0.18183058446496472,
+            "min": 0,
+            "med": 0.125734
+        },
+        "http_reqs": {
+            "count": 1841,
+            "rate": 14.600759916389752
+        },
+        "business_step_success": {
+            "passes": 1831,
+            "fails": 10,
+            "value": 0.9945681694731124
+        },
+        "http_req_connecting": {
+            "avg": 1.2808438837588267,
+            "min": 0,
+            "med": 0,
+            "max": 1077.907642,
+            "p(90)": 0,
+            "p(95)": 0
+        },
+        "checks": {
+            "passes": 2054,
+            "fails": 11,
+            "value": 0.9946731234866828
+        },
+        "vus_max": {
+            "value": 10,
+            "min": 10,
+            "max": 10
+        },
+        "business_flow_success": {
+            "passes": 223,
+            "fails": 10,
+            "value": 0.9570815450643777
+        }
+    },
+    "setup_data": {
+        "adminToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbl9wbGF0YWZvcm1hIiwicm9sZSI6ImFkbWluX3BsYXRhZm9ybWEiLCJjb21lcmNpb19pZCI6bnVsbCwiZXhwIjoxNzk1NDU0MTQwfQ.UuGwHVezp__hMZAruHK-wOyBbgTMOHNM0z22MJnqQEo",
+        "collectorName": "k6_reco_1795425340567_401102185",
+        "collectorToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJrNl9yZWNvXzE3OTU0MjUzNDA1NjdfNDAxMTAyMTg1Iiwicm9sZSI6InJlY29sZWN0b3IiLCJjb21lcmNpb19pZCI6bnVsbCwiZXhwIjoxNzk1NDU0MTQxfQ.b0yobpe2Gcuw2VN0xwfxj1WDJ1b6FAjhexViOAnDdeI",
+        "operatorToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJrNl9vcGVyXzE3OTU0MjUzNDA1NjdfNDAxMTAyMTg1Iiwicm9sZSI6Im9wZXJhZG9yX2Fjb3BpbyIsImNvbWVyY2lvX2lkIjpudWxsLCJleHAiOjE3OTU0NTQxNDF9.16fB9xe2JljDzIIdqw-9krz6dqOiwGWQ0eNDBGJW6n0"
+    }
+}

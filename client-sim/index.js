@@ -31,6 +31,7 @@ if (mode !== 'offline-sync') {
   }
   console.log(`OFFLINE: ${queued.rows.length} documentos guardados localmente sin conexión.`);
 
+  const convergenceStartedAt = performance.now();
   const login = await fetch(`${apiUrl}/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
@@ -60,6 +61,8 @@ if (mode !== 'offline-sync') {
   }
   const final = await db.allDocs({ include_docs: true });
   if (final.rows.some(row => row.doc.sync_status !== 'synced')) throw new Error('Quedaron documentos pendientes después de reconectar.');
+  const convergenceSeconds = (performance.now() - convergenceStartedAt) / 1000;
+  console.log(`CONVERGENCE_SECONDS=${convergenceSeconds.toFixed(3)}`);
   console.log(`PASS: ${final.rows.length} documentos offline sincronizados y verificados en CouchDB a través de la API.`);
   await db.destroy();
 }
