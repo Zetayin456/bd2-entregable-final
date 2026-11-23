@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="es-SV" xml:lang="es-SV">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc 3.14" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <meta name="author" content="Equipo del proyecto" />
+  <title>Sistema de gestión de residuos y reciclaje incentivado para comercios y centros urbanos</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    span.smallcaps{font-variant: small-caps;}
+    em, em em em, em em em em em {
+      font-style: italic;
+    }
+    em em, em em em em {
+      font-style: normal;
+    }
+    div.columns{display: flex; gap: 1.5em;}
+    div.column{flex: auto;}
+    @media screen {
+    div.columns{gap: min(4vw, 1.5em);}
+    div.column{overflow-x: auto;}
+    }
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    /* CSS for syntax highlighting */
+    html { -webkit-text-size-adjust: 100%; }
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+    @media print {
+      html {
+        color-scheme: light only;
+      }
+      html, body, pre, code {
+        background-color: transparent;
+      }
+      body, a, a:visited, blockquote {
+        color: black;
+      }
+      pre, code {
+        padding: 0;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }  </style>
+  <link rel="stylesheet" href="memoria.css" />
+  
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Sistema de gestión de residuos y reciclaje incentivado
+para comercios y centros urbanos</h1>
+<p class="subtitle">Memoria técnica del Proyecto 15</p>
+<p class="author">Equipo del proyecto</p>
+<p class="date">23 de noviembre de 2026</p>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#portada" id="toc-portada">1. Portada</a></li>
+<li><a href="#resumen" id="toc-resumen">2. Resumen</a></li>
+<li><a href="#introducción" id="toc-introducción">3.
+Introducción</a></li>
+<li><a href="#planteamiento-del-problema-y-contexto"
+id="toc-planteamiento-del-problema-y-contexto">4. Planteamiento del
+problema y contexto</a></li>
+<li><a href="#justificación-alcance-y-delimitación"
+id="toc-justificación-alcance-y-delimitación">5. Justificación, alcance
+y delimitación</a></li>
+<li><a href="#objetivos-e-hipótesis" id="toc-objetivos-e-hipótesis">6.
+Objetivos e hipótesis</a></li>
+<li><a href="#estado-del-arte-y-brecha-de-investigación"
+id="toc-estado-del-arte-y-brecha-de-investigación">7. Estado del arte y
+brecha de investigación</a></li>
+<li><a href="#marco-conceptual" id="toc-marco-conceptual">8. Marco
+conceptual</a></li>
+<li><a href="#diseño-metodológico" id="toc-diseño-metodológico">9.
+Diseño metodológico</a></li>
+<li><a href="#arquitectura-y-diseño-del-sistema"
+id="toc-arquitectura-y-diseño-del-sistema">10. Arquitectura y diseño del
+sistema</a></li>
+<li><a href="#implementación-funcional-y-seguridad"
+id="toc-implementación-funcional-y-seguridad">11. Implementación
+funcional y seguridad</a></li>
+<li><a href="#instrumentación-corridas-y-metrología"
+id="toc-instrumentación-corridas-y-metrología">12. Instrumentación,
+corridas y metrología</a></li>
+<li><a href="#resultados" id="toc-resultados">13. Resultados</a></li>
+<li><a href="#discusión-viabilidad-y-limitaciones"
+id="toc-discusión-viabilidad-y-limitaciones">14. Discusión, viabilidad y
+limitaciones</a></li>
+<li><a href="#conclusiones-y-trabajo-futuro"
+id="toc-conclusiones-y-trabajo-futuro">15. Conclusiones y trabajo
+futuro</a></li>
+<li><a href="#referencias" id="toc-referencias">Referencias</a></li>
+<li><a href="#apéndice-a.-evidencia-y-archivos-reproducibles"
+id="toc-apéndice-a.-evidencia-y-archivos-reproducibles">Apéndice A.
+Evidencia y archivos reproducibles</a></li>
+<li><a href="#apéndice-b.-comandos-de-reproducción-del-análisis"
+id="toc-apéndice-b.-comandos-de-reproducción-del-análisis">Apéndice B.
+Comandos de reproducción del análisis</a></li>
+</ul>
+</nav>
+<h1 id="portada">1. Portada</h1>
+<p><strong>Sistema de gestión de residuos y reciclaje incentivado para
+comercios y centros urbanos</strong><br />
+Memoria técnica del Proyecto 15<br />
+Fecha de corte documental: 23 de noviembre de 2026<br />
+Datos institucionales y de autoría individual: no constan en el material
+del repositorio.</p>
+<p><strong>Nota de alcance.</strong> Esta memoria consolida la evidencia
+existente en el repositorio. No se localizó una memoria principal
+anterior en Markdown ni un PDF final para actualizar; por eso este
+archivo establece la versión consolidada actual. Los datos estadísticos
+se transcriben de <code>results/analysis.json</code> y las observaciones
+de <code>results/observations.csv</code>. Las limitaciones de evidencia
+se declaran en cada fase.</p>
+<h1 id="resumen">2. Resumen</h1>
+<p>Se implementó un sistema web para gestionar solicitudes de
+recolección de residuos de comercios, asignación de recolectores,
+registro y verificación de pesajes, acreditación de puntos y canje de
+recompensas. El backend está desarrollado en Rust y persiste documentos
+en Apache CouchDB. El cliente TypeScript usa PouchDB para conservar
+datos y cambios locales en el navegador y sincronizarlos con la API.</p>
+<p>La evaluación de carga compara condiciones de red del mismo API
+Rust+CouchDB, no motores de base de datos ni APIs completas
+equivalentes. <code>analysis.json</code> incluye tres corridas válidas
+por condición: ideal (media 38.9878 solicitudes/s; DE 4.1772) e
+intermitente (media 9.2737 solicitudes/s; DE 0.5474). La prueba global
+fue ANOVA, <em>F</em> = 149.2368, <em>p</em> = 0.0002578. La comparación
+post hoc Welch tuvo <em>p</em> ajustado de Holm = 0.0058430 y delta de
+Cliff = 1.0. La muestra inferencial contiene únicamente corridas con
+flujo de negocio completamente exitoso y cero fallos HTTP. Los
+resultados representan el entorno de laboratorio y no demuestran por sí
+solos una ventaja de producto ni permiten atribuir causalidad a un
+componente aislado.</p>
+<p>El baseline PostgreSQL/<code>pgbench</code> mide upsert y lectura
+indexada sobre una tabla, no un servidor API alternativo. Las series de
+CPU y RAM atribuibles al contenedor API están vacías en las corridas
+archivadas y los hilos no fueron medidos. La revisión bibliográfica fue
+exploratoria: la matriz registra antecedentes preseleccionados, pero no
+un cribado sistemático terminado. Los datos locales web se almacenan en
+IndexedDB/PouchDB y el JWT en <code>localStorage</code>; la aplicación
+no cifra estos datos en reposo.</p>
+<p><strong>Palabras clave:</strong> reciclaje, comercio, incentivos,
+Rust, CouchDB, PouchDB, sincronización offline, red degradada.</p>
+<h1 id="introducción">3. Introducción</h1>
+<p>La gestión de materiales reciclables requiere coordinar generadores,
+recolectores y centros de acopio, conservar evidencia de las cantidades
+recibidas y vincular esa actividad con incentivos verificables. El
+Proyecto 15 aborda esa coordinación por medio de una aplicación web con
+flujo de trabajo por roles y operación tolerante a interrupciones de
+conectividad.</p>
+<p>La memoria presenta el problema, el respaldo bibliográfico
+disponible, el diseño y la implementación, y los resultados
+experimentales efectivamente registrados. Distingue entre
+funcionalidades implementadas, herramientas listas para ejecutarse y
+resultados ya medidos. Esta separación evita convertir una configuración
+experimental en un resultado o una búsqueda exploratoria en una revisión
+sistemática.</p>
+<h1 id="planteamiento-del-problema-y-contexto">4. Planteamiento del
+problema y contexto</h1>
+<p>El problema de diseño es cómo registrar y coordinar solicitudes de
+recolección, pesajes y recompensas cuando los participantes cumplen
+funciones distintas y la conexión puede ser intermitente. El sistema
+debe preservar trazabilidad de las transiciones y evitar duplicar
+pesajes o puntos al reintentar una sincronización.</p>
+<p>El repositorio incorpora como fuente de contexto local un diagnóstico
+institucional del mercado de reciclaje de El Salvador (Ministerio de
+Medio Ambiente y Recursos Naturales [MARN], 2023). La matriz
+bibliográfica informa que se revisó la ficha y no el informe completo;
+por ello esta memoria no atribuye cifras del mercado, prevalencias ni
+cuellos de botella específicos a ese documento. La caracterización
+cuantitativa de PYMES, latencia real de conectividad y tiempos actuales
+de recolección permanece pendiente de levantamiento de campo.</p>
+<p><strong>Pregunta de trabajo.</strong> ¿Cómo se comporta el flujo
+autenticado de gestión de recolecciones en el API Rust+CouchDB bajo las
+condiciones de red de laboratorio registradas, y cómo se conservan y
+sincronizan cambios locales del cliente cuando se recupera la
+conectividad?</p>
+<h1 id="justificación-alcance-y-delimitación">5. Justificación, alcance
+y delimitación</h1>
+<p>La solución integra un flujo auditable con persistencia documental y
+una cola local, elementos pertinentes para procesos en los que la
+conectividad no puede darse por continua. Los incentivos están asociados
+a pesajes verificados y sus movimientos se registran en un ledger, con
+validaciones de saldo e idempotencia en el canje.</p>
+<p>El alcance comprende aplicación web, API, CouchDB, sincronización
+PouchDB, pruebas automatizadas y herramientas de carga/telemetría. No
+comprende despliegue productivo, evaluación del impacto ambiental,
+medición de cambio de conducta de comercios, ni una comparación causal
+PostgreSQL-versus-CouchDB. Tampoco se dispone de un servidor PostgreSQL
+que replique autenticación, reglas, orquestación y contratos HTTP del
+servicio Rust.</p>
+<h1 id="objetivos-e-hipótesis">6. Objetivos e hipótesis</h1>
+<p><strong>Objetivo general.</strong> Implementar y evaluar en
+laboratorio un sistema web de gestión de recolecciones incentivadas para
+comercios, con backend Rust, persistencia CouchDB y cliente con
+capacidad offline-first.</p>
+<p><strong>Objetivos específicos.</strong> (a) Implementar el flujo por
+roles desde la solicitud hasta el cierre y el ledger de puntos; (b)
+conservar localmente datos y cambios pendientes en el cliente y
+sincronizarlos con la API; (c) instrumentar y ejecutar corridas
+repetibles de carga bajo perfiles de red; y (d) describir
+estadísticamente las observaciones válidas sin extrapolar más allá del
+diseño.</p>
+<p><strong>Hipótesis experimental.</strong> H0: la media de throughput
+de corridas válidas del API no difiere entre las condiciones ideal e
+intermitente observadas. H1: al menos una media difiere. El contraste es
+exploratorio: hay tres corridas válidas por grupo, las condiciones se
+ejecutaron en secuencia y el registro no documenta aleatorización del
+orden. Por tanto, la significancia estadística no elimina posibles
+efectos temporales o de entorno.</p>
+<h1 id="estado-del-arte-y-brecha-de-investigación">7. Estado del arte y
+brecha de investigación</h1>
+<p>La matriz de antecedentes contiene seis fuentes académicas/técnicas
+preseleccionadas y una fuente gris contextual. Dal’Pizzol y Rossetto
+(2018) describen una PWA offline-first con PouchDB/CouchDB; Kleppmann et
+al. (2019) exponen principios local-first; Zhang et al. (2022) estudian
+rendimiento de Rust en programas con funcionalidad equivalente; y
+trabajos de Li et al. (2021), Bestari et al. (2026) y Dillman-Hasso
+(2026) abordan incentivos o su persistencia en conductas proambientales.
+La matriz separa el nivel de revisión y la aplicabilidad de cada
+fuente.</p>
+<p>El registro consigna cadenas exploratorias ejecutadas mediante un
+índice web y consulta de páginas fuente. ScienceDirect se revisó
+parcialmente a nivel de registros; no consta búsqueda directa y
+exportación en IEEE Xplore, ACM Digital Library o Scopus. No hay conteos
+reproducibles de resultados, duplicados y exclusiones ni cribado
+completo. La brecha es provisional: en la búsqueda realizada no se
+identificó un estudio que reúna comercios salvadoreños, recompensas,
+sincronización PouchDB/CouchDB y API Rust bajo red degradada. No se
+presenta como ausencia absoluta de literatura ni como revisión
+sistemática concluida.</p>
+<h1 id="marco-conceptual">8. Marco conceptual</h1>
+<p><strong>Offline-first y local-first.</strong> El cliente conserva
+datos en el dispositivo y puede registrar cambios sin conexión; al
+recuperar conectividad intenta sincronizarlos. Esto mejora la
+continuidad operativa, pero introduce decisiones de conflicto,
+retención, separación por identidad y protección del almacenamiento
+local (Dal’Pizzol &amp; Rossetto, 2018; Kleppmann et al., 2019).</p>
+<p><strong>Trazabilidad e idempotencia.</strong> Cada etapa del proceso
+tiene actor y estado; los identificadores deterministas de movimientos
+previenen dobles acreditaciones o débitos en reintentos. La verificación
+del pesaje es la condición para acreditar puntos.</p>
+<p><strong>Medición de desempeño.</strong> Una comparación interpretable
+requiere describir la unidad medida y mantener equivalentes las cargas.
+Los benchmarks de componentes no permiten concluir superioridad de
+sistemas completos si difieren las capas y responsabilidades (Zhang et
+al., 2022). Por ello el baseline SQL se informa separadamente del flujo
+HTTP autenticado.</p>
+<h1 id="diseño-metodológico">9. Diseño metodológico</h1>
+<p>El trabajo combina desarrollo de software y un experimento de
+laboratorio de medidas repetidas independientes por corrida. La
+condición de red es el factor de comparación; el throughput HTTP del
+flujo k6 es la variable de respuesta primaria del análisis archivado.
+Las corridas con éxito de negocio inferior a 100% o fallos HTTP
+distintos de cero se excluyeron del contraste de throughput, pero se
+conservaron para el resumen descriptivo de fiabilidad.</p>
+<p>La comparación estadística disponible incluye condiciones
+<code>A1_ideal_vus10_1m</code> y <code>A1_intermitente_vus10_1m</code>,
+con tres corridas válidas cada una. El analizador aplicó Shapiro-Wilk,
+ANOVA de una vía cuando ambas muestras no rechazaron normalidad,
+contraste post hoc Welch, ajuste de Holm, delta de Cliff e intervalo
+bootstrap de diferencia de medianas. El mínimo de tres réplicas permite
+correr el análisis configurado, pero limita la potencia y la
+generalización. No se documentan aleatorización del orden ni replicación
+en varios hosts.</p>
+<p>Docker Compose proporciona un entorno de laboratorio reproducible con
+API, CouchDB, Prometheus, cAdvisor, k6, simulador offline y perfiles de
+red <code>netem</code>. Las pruebas de integración y recompensas
+verifican rutas y reglas del flujo; no sustituyen el protocolo
+experimental ni miden adopción o impacto ambiental.</p>
+<h1 id="arquitectura-y-diseño-del-sistema">10. Arquitectura y diseño del
+sistema</h1>
+<p>El backend está implementado exclusivamente en Rust y expone una API
+HTTP autenticada. CouchDB conserva usuarios, comercios, solicitudes,
+pesajes, movimientos de puntos, recompensas y saldos. Se definen índices
+Mango para listados por tipo, recompensas activas, movimientos por
+comercio, estados/solicitudes de pesajes y ventanas de captura. La
+documentación pide verificar el plan mediante
+<code>/_explain</code>.</p>
+<p>El frontend está desarrollado en TypeScript. PouchDB mantiene una
+base local en el navegador y la sincronización utiliza la API Rust como
+intermediario de CouchDB. Los documentos guardados pueden llevar estados
+locales <code>pending</code>, <code>synced</code>, <code>conflict</code>
+o <code>rejected</code>. El simulador <code>client-sim</code> permite
+escribir documentos sin HTTP, reenviarlos al reconectar y comprobar su
+lectura remota.</p>
+<p>El baseline separado usa PostgreSQL y <code>pgbench</code> para hacer
+upsert y lectura indexada sobre <code>baseline_documents</code>. No es
+un servidor API alternativo: no reproduce autenticación, autorización,
+reglas de negocio, idempotencia, orquestación Rust ni el costo del
+cliente HTTP. No se combinan sus observaciones con k6 ni se calcula una
+comparación integral entre arquitecturas.</p>
+<h1 id="implementación-funcional-y-seguridad">11. Implementación
+funcional y seguridad</h1>
+<p>Los roles del flujo son <code>admin_plataforma</code>,
+<code>operador_acopio</code>, <code>recolector</code> y
+<code>comercio</code>. El comercio crea solicitudes; operador o
+administración pueden aprobar/rechazar, asignar y verificar; el
+recolector registra pesajes de sus solicitudes; y la recolección se
+completa cuando existe un pesaje verificado. Las validaciones incluyen
+materiales permitidos, límites de peso/fecha, relación con solicitud y
+recolector, prevención de duplicados y transiciones permitidas.</p>
+<p>El backend calcula puntos tras la verificación y conserva movimientos
+idempotentes. El catálogo permite al comercio consultar recompensas y
+solicitar canjes; el servidor comprueba el saldo autoritativo, descuenta
+puntos y registra el débito con clave de idempotencia.</p>
+<p>La auditoría local encontró el JWT y los metadatos de sesión en
+<code>localStorage</code>; datos de negocio y sincronización en PouchDB
+sobre IndexedDB. El código de aplicación no cifra esos datos en reposo,
+no solicita almacenamiento persistente al navegador y no elimina la base
+offline al cerrar sesión. Además, las cuentas
+<code>admin_plataforma</code> usan el mismo nombre de base local. Estas
+son limitaciones de privacidad y separación de datos, no garantías de
+protección. La evaluación detallada está en
+<code>docs/PRIVACIDAD_Y_ALMACENAMIENTO_LOCAL.md</code>.</p>
+<h1 id="instrumentación-corridas-y-metrología">12. Instrumentación,
+corridas y metrología</h1>
+<p>El backend expone <code>/metrics</code> en formato Prometheus con
+contador de solicitudes, histograma de latencia por ruta normalizada y
+contadores de eventos de negocio. Prometheus está configurado para
+scrapear <code>api:8080</code>; cAdvisor expone series de recursos del
+host/contendedores. k6 recorre el ciclo autenticado de solicitud,
+asignación, pesaje, verificación y puntos.
+<code>scripts/run_experiment.ps1</code> captura JSON por corrida y
+actualiza el CSV; el modo offline del simulador reporta convergencia
+cuando la sincronización concluye.</p>
+<p>La revisión de resultados detectó que los JSON archivados no tienen
+muestras válidas de CPU/RAM atribuidas al servicio API
+(<code>data.result</code> vacío en esas consultas). Las series agregadas
+de cAdvisor no identifican el servicio API y no sirven para atribuirle
+consumo. El CSV no incluye CPU ni RAM. No se recolectó ni registró un
+conteo directo de hilos; no se informa ni estima esa cantidad. La
+metrología de recursos del backend queda pendiente de corregir y validar
+en nuevas corridas.</p>
+<h1 id="resultados">13. Resultados</h1>
+<p>Los valores siguientes son los incluidos en
+<code>results/analysis.json</code>. Se muestran con redondeo decimal
+para legibilidad; el archivo JSON es la fuente de precisión
+completa.</p>
+<table>
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;">Condición (corridas válidas)</th>
+<th style="text-align: right;">Media RPS</th>
+<th style="text-align: right;">Mediana RPS</th>
+<th style="text-align: right;">DE</th>
+<th style="text-align: right;">Mínimo-máximo RPS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Ideal, 10 VUs, 1 min (<em>n</em> = 3)</td>
+<td style="text-align: right;">38.9878</td>
+<td style="text-align: right;">40.1732</td>
+<td style="text-align: right;">4.1772</td>
+<td style="text-align: right;">34.3459-42.4442</td>
+</tr>
+<tr>
+<td style="text-align: left;">Intermitente, 10 VUs, 1 min (<em>n</em> =
+3)</td>
+<td style="text-align: right;">9.2737</td>
+<td style="text-align: right;">9.4904</td>
+<td style="text-align: right;">0.5474</td>
+<td style="text-align: right;">8.6511-9.6795</td>
+</tr>
+</tbody>
+</table>
+<p>Shapiro-Wilk: condición ideal, <em>W</em> = 0.9396, <em>p</em> =
+0.5258; intermitente, <em>W</em> = 0.8825, <em>p</em> = 0.3317. ANOVA de
+una vía: <em>F</em> = 149.2368, <em>p</em> = 0.0002578. Contraste post
+hoc Welch: <em>t</em> = 12.2163, <em>p</em> sin ajustar = 0.0058430,
+<em>p</em> de Holm = 0.0058430; delta de Cliff = 1.0; intervalo
+bootstrap del 95% para la diferencia de medianas = [24.6664, 33.7930]
+RPS. Con alfa = 0.05, el JSON marca rechazo de igualdad para esta
+comparación.</p>
+<p>En el resumen de fiabilidad de todas las corridas, la condición ideal
+reunió cinco ejecuciones: tres sin errores y dos excluidas del contraste
+de throughput; su éxito medio de flujo fue 0.6833 y la tasa media de
+fallos HTTP fue 0.1286. La condición intermitente reunió tres
+ejecuciones, todas sin errores; éxito medio de flujo 1.0 y tasa de
+fallos HTTP 0.0. La diferencia entre ese resumen y el conjunto
+inferencial se debe a que las corridas fallidas no entran al contraste
+de throughput.</p>
+<p>Estos resultados indican una diferencia estadística de throughput
+entre las dos condiciones observadas para el API en este laboratorio. No
+estiman una mejora porcentual, no comparan PostgreSQL con CouchDB y no
+prueban superioridad de una arquitectura completa. La interpretación
+debe considerar el pequeño número de réplicas y la ausencia de
+aleatorización documentada.</p>
+<h1 id="discusión-viabilidad-y-limitaciones">14. Discusión, viabilidad y
+limitaciones</h1>
+<p>El sistema cubre el flujo funcional y ofrece mecanismos para
+sincronización y trazabilidad, mientras que los resultados cuantitativos
+actuales se restringen a carga de API en dos perfiles de red. Los
+estudios sobre incentivos respaldan medir conducta observada y
+persistencia, pero los datos de pruebas técnicas no evidencian que los
+comercios aumenten el reciclaje ni que mantengan el comportamiento
+después de retirar una recompensa (Bestari et al., 2026; Dillman-Hasso,
+2026; Li et al., 2021).</p>
+<p>La viabilidad técnica para laboratorio está respaldada por
+construcción del stack y pruebas automatizadas documentadas. La
+viabilidad operativa, económica, legal y ambiental requiere validación
+con comercios, recolectores y entidades locales. Antes de cualquier uso
+real, las prioridades son: mejorar protección de token/datos locales,
+establecer retención y borrado, aislar bases por identidad, instrumentar
+CPU/RAM del contenedor API y conteo verificable de hilos si se mantiene
+como métrica, ampliar réplicas y documentar orden aleatorio, y completar
+una búsqueda bibliográfica con cribado y conteos reproducibles.</p>
+<p>La referencia PostgreSQL/<code>pgbench</code> es útil para
+caracterizar una carga SQL de persistencia, pero no es equivalente al
+flujo autenticado de k6. Para comparar servicios completos se requiere
+otro API que replique contratos, autenticación, autorización y reglas
+con recursos, datos, red y cliente equivalentes; hasta entonces no se
+atribuyen diferencias a los motores de persistencia.</p>
+<h1 id="conclusiones-y-trabajo-futuro">15. Conclusiones y trabajo
+futuro</h1>
+<p>El Proyecto 15 dispone de un flujo de producto implementado que
+vincula comercios, solicitudes, recolectores, pesajes verificados,
+puntos y canjes idempotentes, junto con cliente PouchDB y API
+Rust/CouchDB. El stack incluye automatización de pruebas, simulación de
+red y carga.</p>
+<p>La evidencia experimental vigente permite una comparación estadística
+limitada entre las condiciones ideal e intermitente del mismo API. El
+análisis registró diferencias de throughput con Holm <em>p</em> =
+0.0058430; no hay base para conclusiones comparativas entre APIs
+completas ni para medir CPU/RAM del API en las corridas guardadas. El
+uso de hilos permanece sin medir.</p>
+<p>La revisión bibliográfica es exploratoria y la brecha propuesta es
+provisional. La memoria hace visibles esas limitaciones y no sustituye
+trabajo de campo ni cierre de protocolo. El trabajo futuro debe
+completar la búsqueda sistemática, obtener datos locales primarios,
+corregir la atribución de métricas de recursos, ejecutar más réplicas
+con orden aleatorio, formalizar privacidad y retención, y evaluar
+adopción y persistencia del efecto de los incentivos.</p>
+<h1 id="referencias">Referencias</h1>
+<div class="references">
+
+</div>
+<h1 id="apéndice-a.-evidencia-y-archivos-reproducibles">Apéndice A.
+Evidencia y archivos reproducibles</h1>
+<ul>
+<li>Observaciones originales por corrida:
+<code>results/observations.csv</code>.</li>
+<li>Análisis estadístico y alcance del baseline:
+<code>results/analysis.json</code>.</li>
+<li>Código del análisis: <code>analysis/analizar.py</code>.</li>
+<li>Registro bibliográfico, búsqueda exploratoria, criterios y
+limitaciones:
+<code>docs/revision_bibliografica/Matriz_antecedentes_y_registro_busqueda_Proyecto15.xlsx</code>.</li>
+<li>Diseño de persistencia y alcance de <code>pgbench</code>:
+<code>docs/PERSISTENCIA_Y_BASELINE.md</code>.</li>
+<li>Instrumentación, CPU/RAM e hilos:
+<code>docs/MODULO8_METRICAS_EXPERIMENTOS.md</code>.</li>
+<li>Privacidad y almacenamiento local:
+<code>docs/PRIVACIDAD_Y_ALMACENAMIENTO_LOCAL.md</code>.</li>
+<li>Funciones del producto y modo offline:
+<code>docs/MODULO7_FLUJOS_PRODUCTO.md</code>.</li>
+</ul>
+<h1 id="apéndice-b.-comandos-de-reproducción-del-análisis">Apéndice B.
+Comandos de reproducción del análisis</h1>
+<p>Desde la raíz del repositorio, con Python y las dependencias
+NumPy/SciPy instaladas:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>python <span class="op">.</span>\analysis\analizar<span class="op">.</span><span class="fu">py</span> <span class="op">.</span>\results\observations<span class="op">.</span><span class="fu">csv</span> <span class="op">--</span>output <span class="op">.</span>\results\analysis<span class="op">.</span><span class="fu">json</span></span></code></pre></div>
+<p>El PDF se exporta desde este Markdown con Pandoc y XeLaTeX. Al
+regenerarlo, primero actualice y revise el JSON de análisis; no agregue
+valores de corridas aisladas que no estén en el análisis citado.</p>
+</body>
+</html>

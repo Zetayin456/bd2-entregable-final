@@ -7,12 +7,27 @@ x-limites: &limites
 services:
   couchdb:
     image: couchdb:3.3
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        COUCHDB_USER_CLEAN=$$(printf '%s' "$$COUCHDB_USER" | tr -d '\015')
+        COUCHDB_PASSWORD_CLEAN=$$(printf '%s' "$$COUCHDB_PASSWORD" | tr -d '\015')
+        COUCHDB_PROXY_SECRET_CLEAN=$$(printf '%s' "$$COUCHDB_PROXY_SECRET" | tr -d '\015')
+        test -n "$$COUCHDB_USER_CLEAN" && test -n "$$COUCHDB_PASSWORD_CLEAN" && test -n "$$COUCHDB_PROXY_SECRET_CLEAN"
+        printf '[admins]\n%s = %s\n' "$$COUCHDB_USER_CLEAN" "$$COUCHDB_PASSWORD_CLEAN" > /opt/couchdb/etc/local.d/00-admin.ini
+        printf '[chttpd_auth]\nsecret = %s\n' "$$COUCHDB_PROXY_SECRET_CLEAN" > /opt/couchdb/etc/local.d/05-proxy-secret.ini
+        chown couchdb:couchdb /opt/couchdb/etc/local.d/00-admin.ini /opt/couchdb/etc/local.d/05-proxy-secret.ini
+        export HOME=/opt/couchdb
+        exec setpriv --reuid=couchdb --regid=couchdb --clear-groups /opt/couchdb/bin/couchdb
     <<: *limites
     environment:
-      COUCHDB_USER: 
-      COUCHDB_PASSWORD: 
+      COUCHDB_USER: ${COUCHDB_USER:?Define COUCHDB_USER en .env}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?Define COUCHDB_PASSWORD en .env}
+      COUCHDB_PROXY_SECRET: ${COUCHDB_PROXY_SECRET:?Define COUCHDB_PROXY_SECRET en .env}
     volumes:
       - couchdb_data:/opt/couchdb/data
+      - ./couchdb/lab.ini:/opt/couchdb/etc/local.d/10-security.ini:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:5984/_up"]
       interval: 5s
@@ -26,7 +41,12 @@ services:
       couchdb: { condition: service_healthy }
     volumes: ["./couchdb/init.sh:/init.sh:ro"]
     entrypoint: ["/bin/sh", "/init.sh"]
-    env_file: .env
+    environment:
+      COUCHDB_URL: http://couchdb:5984
+      COUCHDB_USER: ${COUCHDB_USER:?Define COUCHDB_USER en .env}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?Define COUCHDB_PASSWORD en .env}
+      BOOTSTRAP_ADMIN_USER: ${BOOTSTRAP_ADMIN_USER:?Define BOOTSTRAP_ADMIN_USER en .env}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?Define BOOTSTRAP_ADMIN_PASSWORD en .env}
     networks: [backend_net]
 
   api:
@@ -34,9 +54,11 @@ services:
     <<: *limites
     environment:
       COUCHDB_URL: http://couchdb:5984
-      COUCHDB_USER: 
-      COUCHDB_PASSWORD: 
-      JWT_SECRET: 
+      COUCHDB_USER: ${COUCHDB_USER:?Define COUCHDB_USER en .env}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?Define COUCHDB_PASSWORD en .env}
+      COUCHDB_PROXY_SECRET: ${COUCHDB_PROXY_SECRET:?Define COUCHDB_PROXY_SECRET en .env}
+      COUCHDB_DB: reciclaje
+      JWT_SECRET: ${JWT_SECRET:?Define JWT_SECRET en .env}
       RUST_LOG: info
     depends_on:
       couchdb-init: { condition: service_completed_successfully }
@@ -46,7 +68,8 @@ services:
   web:
     build: ./frontend
     environment:
-      VITE_API_URL: http://api:8080
+      VITE_API_URL: /
+      VITE_PROXY_TARGET: http://api:8080
     ports: ["5173:5173"]
     volumes:
       - ./frontend:/app
@@ -58,6 +81,8 @@ services:
     environment:
       API_URL: http://api:8080
       SIM_CLIENTS: 100
+      SIM_ADMIN_USER: ${BOOTSTRAP_ADMIN_USER:?Define BOOTSTRAP_ADMIN_USER en .env}
+      SIM_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?Define BOOTSTRAP_ADMIN_PASSWORD en .env}
     depends_on: [api]
     networks: [edge_net]
 
@@ -67,6 +92,7 @@ services:
     cap_add: [NET_ADMIN]
     environment:
       NETEM_PROFILE: 
+      NETEM_INTERFACE: ${NETEM_API_INTERFACE:-eth1}
     volumes: ["./netem:/scripts:ro"]
     entrypoint: ["/bin/sh", "/scripts/apply_profile.sh"]
     restart: "no"
@@ -77,13 +103,18 @@ services:
     cap_add: [NET_ADMIN]
     environment:
       NETEM_PROFILE: 
+      NETEM_INTERFACE: ${NETEM_CLIENT_INTERFACE:-eth0}
     volumes: ["./netem:/scripts:ro"]
     entrypoint: ["/bin/sh", "/scripts/apply_profile.sh"]
     restart: "no"
 
   prometheus:
     image: prom/prometheus:v2.53.0
-    volumes: ["./telemetry/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--web.enable-remote-write-receiver", "--storage.tsdb.path=/prometheus", "--storage.tsdb.retention.time=30d"]
+    volumes:
+      - ./telemetry/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["9090:9090"]
     networks: [backend_net, edge_net]
 
   cadvisor:
@@ -101,32 +132,56 @@ services:
     cpuset: "6-7"
     environment:
       TARGET: http://api:8080
-      VUS: 
+      VUS: ${VUS:-10}
+      DURATION: ${DURATION:-2m}
+      RUN_ID: ${RUN_ID:-manual}
+      NETEM_PROFILE: ${NETEM_PROFILE:-ideal}
+      K6_ADMIN_USER: ${BOOTSTRAP_ADMIN_USER:?Define BOOTSTRAP_ADMIN_USER en .env}
+      K6_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?Define BOOTSTRAP_ADMIN_PASSWORD en .env}
       K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
-    volumes: ["./load:/scripts:ro"]
-    command: ["run", "-o", "experimental-prometheus-rw", "/scripts/reciclaje.js"]
-    depends_on: [api]
-    networks: [edge_net]
+    volumes: ["./load:/scripts:ro", "./results:/results"]
+    command: ["run", "--summary-export", "/results/${RUN_ID:-manual}-k6.json", "-o", "experimental-prometheus-rw", "/scripts/reciclaje.js"]
+    depends_on: [api, client-sim]
+    network_mode: "service:client-sim"
 
   postgres:
     image: postgres:16
     profiles: ["baseline"]
     <<: *limites
     environment:
-      POSTGRES_PASSWORD: 
+      POSTGRES_USER: baseline
+      POSTGRES_PASSWORD: ${BASELINE_POSTGRES_PASSWORD:-baseline-local}
       POSTGRES_DB: reciclaje
     volumes: ["pg_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U baseline -d reciclaje"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     networks: [backend_net]
 
-  baseline-api:
-    build: ./baseline
-    profiles: ["baseline"]
+  baseline-bench:
+    image: postgres:16
+    profiles: ["baseline-bench"]
     <<: *limites
     environment:
-      DATABASE_URL: postgres://postgres:@postgres:5432/reciclaje
-    depends_on: [postgres]
-    ports: ["8081:8081"]
-    networks: [backend_net, edge_net]
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: baseline
+      PGPASSWORD: ${BASELINE_POSTGRES_PASSWORD:-baseline-local}
+      PGDATABASE: reciclaje
+      BASELINE_CLIENTS: ${BASELINE_CLIENTS:-10}
+      BASELINE_JOBS: ${BASELINE_JOBS:-2}
+      BASELINE_DURATION: ${BASELINE_DURATION:-60}
+      BASELINE_SEED: ${BASELINE_SEED:-15015}
+      RUN_ID: ${RUN_ID:-baseline-manual}
+    volumes:
+      - ./baseline:/baseline:ro
+      - ./results:/results
+    entrypoint: ["/bin/sh", "/baseline/run.sh"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [backend_net]
 
 networks:
   backend_net: {}
@@ -135,3 +190,4 @@ networks:
 volumes:
   couchdb_data: {}
   pg_data: {}
+  prometheus_data: {}

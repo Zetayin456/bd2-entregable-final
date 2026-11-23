@@ -1,0 +1,78 @@
+﻿{
+    "run_id":  "20261123-030542-975-ideal-vus10",
+    "network_profile":  "ideal",
+    "configured_vus":  10,
+    "duration":  "1m",
+    "started_at_utc":  "2026-11-23T09:06:08.7391416+00:00",
+    "ended_at_utc":  "2026-11-23T09:06:11.7650500+00:00",
+    "k6_exit_code":  107,
+    "api_scrape_target":  "api:8080/metrics",
+    "results":  {
+                    "api_request_rate":  {
+                                             "status":  "success",
+                                             "data":  {
+                                                          "resultType":  "matrix",
+                                                          "result":  [
+
+                                                                     ]
+                                                      }
+                                         },
+                    "api_request_rate_by_route":  {
+                                                      "status":  "success",
+                                                      "data":  {
+                                                                   "resultType":  "matrix",
+                                                                   "result":  [
+
+                                                                              ]
+                                                               }
+                                                  },
+                    "api_request_p95_seconds_by_route":  {
+                                                             "status":  "success",
+                                                             "data":  {
+                                                                          "resultType":  "matrix",
+                                                                          "result":  [
+
+                                                                                     ]
+                                                                      }
+                                                         },
+                    "api_cpu_cores":  {
+                                          "status":  "success",
+                                          "data":  {
+                                                       "resultType":  "matrix",
+                                                       "result":  [
+
+                                                                  ]
+                                                   }
+                                      },
+                    "api_memory_working_set_bytes":  {
+                                                         "status":  "success",
+                                                         "data":  {
+                                                                      "resultType":  "matrix",
+                                                                      "result":  [
+
+                                                                                 ]
+                                                                  }
+                                                     },
+                    "cadvisor_scrape_up":  {
+                                               "status":  "success",
+                                               "data":  {
+                                                            "resultType":  "matrix",
+                                                            "result":  [
+                                                                           {
+                                                                               "metric":  {
+                                                                                              "__name__":  "up",
+                                                                                              "instance":  "cadvisor:8080",
+                                                                                              "job":  "cadvisor"
+                                                                                          },
+                                                                               "values":  [
+                                                                                              [
+                                                                                                  1795424768,
+                                                                                                  "1"
+                                                                                              ]
+                                                                                          ]
+                                                                           }
+                                                                       ]
+                                                        }
+                                           }
+                }
+}

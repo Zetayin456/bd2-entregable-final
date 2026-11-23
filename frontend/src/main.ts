@@ -1,124 +1,248 @@
-﻿// Usamos la instancia global inyectada por el CDN
-const PouchDB = (window as any).PouchDB;
+import './style.css';
+import { api, ApiError, sesion } from './data/api';
+import { cambiarAlmacenPorSesion, guardarLocal, iniciarSincronizacion, listarDocumentos, observarSync, resolverConflicto, sincronizar, type SyncSnapshot } from './data/pouch';
+import type { Comercio, Documento, EstadoPesaje, MovimientoPuntos, Pesaje, Recompensa, Rol, SolicitudRecoleccion, TipoDocumento } from './domain/tipos';
 
+const app = document.querySelector<HTMLDivElement>('#app');
+if (!app) throw new Error('No se encontró el contenedor #app');
 
-const localDB = new PouchDB('reciclaje_local');
+const titles: Record<string, string> = { inicio: 'Panel principal', comercios: 'Comercios', solicitudes: 'Solicitudes', pesajes: 'Pesajes', puntos: 'Puntos y recompensas', equipo: 'Equipo y usuarios' };
+const roleLabels: Record<Rol, string> = { admin_plataforma: 'Administrador', operador_acopio: 'Operador de acopio', recolector: 'Recolector', comercio: 'Comercio' };
+let activeView = 'inicio';
 
-document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #f9f9f9; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-    <header style="border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px;">
-      <h1 style="color: #007bff; margin: 0;">Gestión de Residuos y Reciclaje Incentivado</h1>
-      <p style="color: #666; margin: 5px 0 0 0;">Universidad de El Salvador - Fase 3 (Sincronización Distribuida)</p>
-      <div id="estadoSync" style="margin-top: 8px; font-size: 13px; font-weight: bold; color: #d9534f;">Estado Sync: Desconectado del Backend</div>
-    </header>
+app.innerHTML = `
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-icon">♻</div><div><strong>EcoGestión</strong><small>RECICLAJE INCENTIVADO</small></div></div>
+      <div class="menu-label">MENÚ PRINCIPAL</div>
+      <nav class="navigation">${Object.entries({ inicio: '⌂|Inicio', comercios: '▦|Comercios', solicitudes: '▤|Solicitudes', pesajes: '⚖|Pesajes', puntos: '✧|Puntos y recompensas', equipo: '♙|Equipo' }).map(([key, item]) => { const [icon, label] = item.split('|'); return `<button class="nav-link" data-view="${key}"><span>${icon}</span>${label}</button>`; }).join('')}</nav>
+      <div class="sidebar-bottom"><div class="offline-status" id="sync-indicator"><i></i><div><b>Sincronización</b><small id="api-state">Sin comprobar</small></div></div><small class="version">Sistema de Gestión · Módulo 3</small></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div><span class="eyebrow">PLATAFORMA DE RECICLAJE</span><h1 id="page-title">Panel principal</h1></div><div class="profile"><button id="sync-button" class="secondary-button" type="button">Sincronizar</button><div class="avatar" id="profile-avatar">?</div><div><b id="profile-name">Sin sesión</b><small id="profile-role">Inicia sesión para consultar</small></div><button id="session-button" class="secondary-button">Iniciar sesión</button></div></header>
+      <section id="content" class="content"></section>
+      <footer>© 2026 Sistema de Gestión de Residuos y Reciclaje Incentivado</footer>
+    </main>
+  </div>`;
 
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-      <section style="background: white; padding: 20px; border-radius: 6px; border: 1px solid #ddd;">
-        <h3 style="margin-top: 0; color: #333;">📦 Registrar Pesaje (Local-First)</h3>
-        <div style="margin-bottom: 10px;">
-          <label style="display: block; font-size: 14px; margin-bottom: 5px;">ID Comercio:</label>
-          <input type="text" id="comercioId" value="comercio:7b1e2c10" style="width: 100%; padding: 8px; box-sizing: border-box;" />
-        </div>
-        <div style="margin-bottom: 10px;">
-          <label style="display: block; font-size: 14px; margin-bottom: 5px;">Peso Material (kg):</label>
-          <input type="number" id="pesoKg" value="25" style="width: 100%; padding: 8px; box-sizing: border-box;" />
-        </div>
-        <button id="btnRegistrar" style="background: #28a745; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%;">Registrar en IndexedDB</button>
-        <p id="mensajeRegistro" style="margin-top: 10px; font-size: 13px; font-weight: bold;"></p>
-      </section>
+const content = document.querySelector<HTMLElement>('#content')!;
+const title = document.querySelector<HTMLElement>('#page-title')!;
+const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+function notify(message: string, isError = false) { const target = content.querySelector<HTMLElement>('#feedback'); if (target) { target.textContent = message; target.className = `feedback ${isError ? 'error' : 'success'}`; } }
+function report(error: unknown) { notify(error instanceof ApiError ? error.message : 'Ocurrió un error al procesar la solicitud.', true); if (error instanceof ApiError && error.status === 401) { sesion.clear(); updateProfile(); renderLogin(); } }
+function syncStatus(doc: { sync_status?: string; sync_error?: string }) { return doc.sync_status === 'rejected' ? `Rechazado: ${doc.sync_error ?? 'el servidor rechazó el registro'}` : doc.sync_status === 'pending' ? 'Pendiente de sincronizar' : doc.sync_status === 'conflict' ? 'Conflicto' : doc.sync_status === 'synced' ? 'Confirmado' : 'Sin sincronizar'; }
+function updateProfile() { const role = sesion.role; document.querySelector('#profile-name')!.textContent = role ? roleLabels[role] : 'Sin sesión'; document.querySelector('#profile-role')!.textContent = role ? 'Sesión autenticada' : 'Inicia sesión para consultar'; document.querySelector('#profile-avatar')!.textContent = role ? roleLabels[role][0] : '?'; document.querySelector('#session-button')!.textContent = role ? 'Cerrar sesión' : 'Iniciar sesión'; }
 
-      <section style="background: white; padding: 20px; border-radius: 6px; border: 1px solid #ddd;">
-        <h3 style="margin-top: 0; color: #333;">🔄 Sincronización y Puntos</h3>
-        <button id="btnConectarSync" style="background: #ffc107; color: #333; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%; font-weight: bold; margin-bottom: 10px;">Iniciar Sync con CouchDB</button>
-        <button id="btnConsultar" style="background: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%;">Calcular Puntos Locales</button>
-        <div id="resultadoSaldo" style="margin-top: 15px; font-size: 15px; font-weight: bold; color: #333;">Registros locales: 0</div>
-      </section>
-    </div>
-  </div>
-`;
+function renderLogin() {
+  title.textContent = 'Iniciar sesión';
+  content.innerHTML = `<article class="panel form-panel"><div class="panel-heading"><div><h3>Acceso al sistema</h3><p>Usa las credenciales de tu cuenta de reciclaje.</p></div></div><form id="login-form" class="data-form"><label>Usuario<input name="username" required autocomplete="username" minlength="3" maxlength="80"></label><label>Contraseña<input name="password" type="password" required autocomplete="current-password" maxlength="256"></label><button class="primary-button" type="submit">Iniciar sesión</button></form><div id="feedback" class="feedback" role="status" aria-live="polite"></div></article>`;
+  content.querySelector<HTMLFormElement>('#login-form')!.addEventListener('submit', async event => {
+    event.preventDefault(); const form = new FormData(event.currentTarget as HTMLFormElement);
+    try { const result = await api.login(String(form.get('username')), String(form.get('password'))); sesion.save(result); await cambiarAlmacenPorSesion(); updateProfile(); iniciarSincronizacion(); await openView('inicio'); }
+    catch (error) { report(error); }
+  });
+}
 
-document.getElementById('btnRegistrar')?.addEventListener('click', async () => {
-  const comercioId = (document.getElementById('comercioId') as HTMLInputElement).value;
-  const pesoKg = parseFloat((document.getElementById('pesoKg') as HTMLInputElement).value);
-  const msg = document.getElementById('mensajeRegistro');
+async function list<T extends Documento>(type: TipoDocumento) { return listarDocumentos<T>(type); }
+async function saveOfflineFirst<T extends Documento>(doc: T) { await guardarLocal(doc); void sincronizar(); }
+async function saveOperational<T extends Documento>(doc: T, successMessage: string, pendingMessage = successMessage) {
+  await guardarLocal(doc);
+  if (navigator.onLine && sesion.token) await sincronizar();
+  const current = (await list(doc.type)).find(item => item._id === doc._id);
+  if (current?.sync_error) return { message: current.sync_error, isError: true };
+  if (current?.sync_status === 'conflict') return { message: 'El registro cambió en el servidor; revisa el conflicto antes de continuar.', isError: true };
+  return current?.sync_status === 'synced'
+    ? { message: `${successMessage} Confirmado por el servidor.`, isError: false }
+    : { message: `${pendingMessage} Guardado localmente; pendiente de sincronización.`, isError: false };
+}
+async function finishOperational(doc: Documento, successMessage: string, view: string, pendingMessage = successMessage) {
+  const outcome = await saveOperational(doc, successMessage, pendingMessage);
+  await openView(view);
+  notify(outcome.message, outcome.isError);
+}
+const dateText = (value?: string) => value ? new Date(value).toLocaleString() : '—';
+function table(headers: string[], rows: string[][]) { if (!rows.length) return '<div class="empty-state"><span>♻</span><b>No hay registros disponibles</b><p>Los datos aparecerán aquí cuando existan registros en el servidor.</p></div>'; return `<div class="table-wrap"><table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`; }
+function section(titleText: string, description: string, body: string, action = '') { content.innerHTML = `<div class="section-heading"><div><h2>${esc(titleText)}</h2><p>${esc(description)}</p></div>${action}</div><article class="panel list-panel">${body}</article><div id="feedback" class="feedback" role="status" aria-live="polite"></div>`; }
+function addAction(label: string) { return `<button id="add-record" class="primary-button">＋ ${esc(label)}</button>`; }
 
-  const doc = {
-    _id: `pesaje:${new Date().toISOString().slice(0, 10)}:${crypto.randomUUID()}`,
-    type: 'pesaje',
-    comercio_id: comercioId,
-    recolector_id: 'recolector:brandon',
-    lineas: [{ material: 'carton', peso_kg: pesoKg }],
-    estado: 'pendiente_verificacion',
-    capturado_en: new Date().toISOString()
-  };
+async function renderDashboard() {
+  const [comercios, solicitudes, pesajes, movimientos] = await Promise.all([
+    list<Comercio>('comercio'), list<SolicitudRecoleccion>('solicitud_recoleccion'), list<Pesaje>('pesaje'), list<MovimientoPuntos>('movimiento_puntos')
+  ]);
+  const total = movimientos.reduce((sum, movimiento) => sum + (movimiento.concepto === 'canje' ? -movimiento.puntos : movimiento.puntos), 0);
+  content.innerHTML = `<div class="welcome"><div><span class="welcome-tag">♻ JUNTOS POR UN FUTURO MÁS LIMPIO</span><h2>¡Bienvenido al sistema!</h2><p>Consulta la información guardada en el servidor según los permisos de tu cuenta.</p></div><div class="welcome-art" aria-hidden="true">♻</div></div>
+    <div class="section-heading"><div><h2>Resumen general</h2><p>Indicadores recibidos de la API de reciclaje.</p></div><span class="local-pill"><i></i> Datos del servidor</span></div>
+    <div class="stats-grid">
+      <article class="stat-card"><div class="stat-top"><span>Comercios registrados</span><span class="stat-icon green">▦</span></div><strong>${comercios.length}</strong><small>Visibles para tu rol</small></article>
+      <article class="stat-card"><div class="stat-top"><span>Solicitudes</span><span class="stat-icon blue">▤</span></div><strong>${solicitudes.length}</strong><small>Registros visibles</small></article>
+      <article class="stat-card"><div class="stat-top"><span>Pesajes registrados</span><span class="stat-icon orange">⚖</span></div><strong>${pesajes.length}</strong><small>Registros visibles</small></article>
+      <article class="stat-card"><div class="stat-top"><span>Puntos netos globales</span><span class="stat-icon purple">✧</span></div><strong>${total.toLocaleString()} pts</strong><small>Ledger de comercios visibles</small></article>
+    </div><div class="dashboard-grid"><article class="panel"><div class="panel-heading"><div><h3>Accesos rápidos</h3><p>Abre un módulo para consultar o registrar información</p></div></div><div class="quick-actions"><button data-go="comercios" class="quick-action"><span class="quick-icon green">▦</span><span><b>Comercios</b><small>Consultar registros del servidor</small></span><em>›</em></button><button data-go="solicitudes" class="quick-action"><span class="quick-icon blue">▤</span><span><b>Solicitudes</b><small>Ver recolecciones solicitadas</small></span><em>›</em></button></div></article><article class="panel connection-panel"><div class="panel-heading"><div><h3>Conexión con la API</h3><p>Los cambios se guardan primero en PouchDB</p></div><span class="status-badge"><i></i> Activa</span></div><div class="connection-row"><span class="db-symbol">◈</span><div><b>CouchDB vía backend</b><small>Sincronización protegida por sesión</small></div><strong class="status-text">ACTIVO</strong></div><p class="note">Los registros pendientes se envían al recuperar la conexión; los pesajes verificados generan su acreditación automática.</p></article></div><div id="feedback" class="feedback" role="status" aria-live="polite"></div>`;
+  content.querySelectorAll<HTMLButtonElement>('[data-go]').forEach(button => button.addEventListener('click', () => openView(button.dataset.go!)));
+}
 
-  try {
-    await localDB.put(doc);
-    if (msg) {
-      msg.style.color = 'green';
-      msg.textContent = `¡Guardado localmente! ID: ${doc._id.slice(0, 20)}...`;
+async function showComercios() {
+  const docs = await list<Comercio>('comercio');
+  const canCreate = sesion.role === 'admin_plataforma' || sesion.role === 'operador_acopio';
+  section('Directorio de comercios', 'Registros locales de PouchDB; los cambios se sincronizan con CouchDB.', `<div class="panel-heading"><div><h3>Comercios registrados</h3><p>${docs.length} registro(s) local(es)</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Nombre','Giro','Zona','Estado','Sincronización','Identificador'], docs.map(d => [esc(d.nombre),esc(d.giro || '—'),esc(d.zona || '—'),esc(d.activo === false ? 'inactivo' : d.estado || 'activo'),esc(d.sync_status==='pending'?'pendiente':d.sync_status==='conflict'?'conflicto':'al día'),`<code>${esc(d._id)}</code>`]))}`, canCreate ? addAction('Registrar comercio') : '');
+  content.querySelector('#refresh-list')?.addEventListener('click', () => openView('comercios'));
+  content.querySelector('#add-record')?.addEventListener('click', () => formDialog('Registrar comercio', [['nombre','Nombre','text'],['giro','Giro','text'],['zona','Zona','text']], async values => { const id = `comercio:${crypto.randomUUID()}`; await saveOfflineFirst({ _id:id,type:'comercio',nombre:values.nombre,giro:values.giro,zona:values.zona,activo:true,creado_en:new Date().toISOString() }); await openView('comercios'); notify('Guardado localmente; queda en cola de sincronización.'); }));
+}
+
+async function showSolicitudes() {
+  const docs = await list<SolicitudRecoleccion>('solicitud_recoleccion');
+  const role = sesion.role;
+  const canCreate = role === 'comercio' || role === 'admin_plataforma';
+  const canOperate = role === 'operador_acopio' || role === 'admin_plataforma';
+  const collectors = canOperate ? (await api.collectors()).collectors : [];
+  const pesajes = await list<Pesaje>('pesaje');
+  const rows = docs.map(d => {
+    let action = `<code>${esc(d._id)}</code>`;
+    if (role === 'comercio' && d.estado === 'pendiente') action = `<button class="secondary-button" data-cancel="${esc(d._id)}">Cancelar</button>`;
+    if (canOperate && d.estado === 'pendiente') action = `<button class="secondary-button" data-approve="${esc(d._id)}">Aprobar</button> <button class="secondary-button" data-reject="${esc(d._id)}">Rechazar</button>`;
+    if (canOperate && d.estado === 'aprobada') action = `<label class="inline-action">Recolector<select data-collector="${esc(d._id)}"><option value="">Selecciona</option>${collectors.map(name=>`<option value="${esc(name)}">${esc(name)}</option>`).join('')}</select></label><button class="secondary-button" data-assign="${esc(d._id)}">Asignar</button>`;
+    if (canOperate && d.estado === 'asignada') {
+      const verified = pesajes.some(p=>p.solicitud_id===d._id&&p.estado==='verificado');
+      action = verified ? `<button class="secondary-button" data-complete="${esc(d._id)}">Cerrar recolección</button>` : `<span>Esperando pesaje verificado</span>`;
     }
-  } catch (err) {
-    if (msg) {
-      msg.style.color = 'red';
-      msg.textContent = `Error: ${err}`;
-    }
+    if (d.sync_status === 'rejected') action += ` <button class="secondary-button" data-retry="${esc(d._id)}">Corregir y reintentar</button>`;
+    return [esc(d.comercio_id),esc(d.estado),esc(d.recolector_id||'Sin asignar'),esc(d.fecha_solicitada||dateText(d.creada_en)),esc(d.observaciones||'—'),esc(syncStatus(d)),action];
+  });
+  section('Solicitudes de recolección', 'Comercios solicitan; operaciones aprueba y asigna; el recolector registra el pesaje y operaciones cierra tras verificarlo.', `<div class="panel-heading"><div><h3>Solicitudes</h3><p>${docs.length} registro(s) local(es)</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Comercio','Estado','Recolector','Fecha solicitada','Observaciones','Sincronización','Acción'],rows)}`, canCreate ? addAction('Crear solicitud') : '');
+  content.querySelector('#refresh-list')?.addEventListener('click', () => openView('solicitudes'));
+  content.querySelector('#add-record')?.addEventListener('click', () => formDialog('Nueva solicitud', [['comercio_id','ID del comercio','text'],['fecha_solicitada','Fecha solicitada','date'],['observaciones','Observaciones','text']], async values => { const id=`solicitud:${crypto.randomUUID()}`; await finishOperational({ _id:id,type:'solicitud_recoleccion',comercio_id:values.comercio_id,fecha_solicitada:values.fecha_solicitada,observaciones:values.observaciones,estado:'pendiente',creada_en:new Date().toISOString() },'Solicitud creada.','solicitudes'); }));
+  content.querySelectorAll<HTMLButtonElement>('[data-approve],[data-reject],[data-cancel],[data-complete]').forEach(button=>button.addEventListener('click',async()=>{
+    const doc=docs.find(item=>item._id===(button.dataset.approve||button.dataset.reject||button.dataset.cancel||button.dataset.complete)); if(!doc)return;
+    const next={...doc,estado:button.hasAttribute('data-approve')?'aprobada':button.hasAttribute('data-reject')?'rechazada':button.hasAttribute('data-cancel')?'cancelada':'completada'};
+    const action=button.hasAttribute('data-approve')?'Solicitud aprobada.':button.hasAttribute('data-reject')?'Solicitud rechazada.':button.hasAttribute('data-cancel')?'Solicitud cancelada.':'Recolección cerrada.';
+    try{await finishOperational(next,action,'solicitudes');}catch(error){report(error);}
+  }));
+  content.querySelectorAll<HTMLButtonElement>('[data-retry]').forEach(button=>button.addEventListener('click',async()=>{const doc=docs.find(item=>item._id===button.dataset.retry);if(!doc)return;const editable={...doc} as Record<string,unknown>;for(const key of ['_rev','remote_rev','sync_status','local_modified_at','sync_error','conflict_remote'])delete editable[key];const value=window.prompt('Corrige los campos del documento en formato JSON. Se conservarán su ID y tipo.',JSON.stringify(editable,null,2));if(value===null)return;try{const corrected=JSON.parse(value) as Documento;if(corrected._id!==doc._id||corrected.type!==doc.type)throw new Error('El ID y tipo del documento no se pueden cambiar.');await guardarLocal({...doc,...corrected} as Documento);await sincronizar();await openView('solicitudes');}catch(error){report(error);}}));
+  content.querySelectorAll<HTMLButtonElement>('[data-assign]').forEach(button=>button.addEventListener('click',async()=>{
+    const doc=docs.find(item=>item._id===button.dataset.assign);const collector=content.querySelector<HTMLSelectElement>(`select[data-collector="${CSS.escape(button.dataset.assign!)}"]`)?.value;if(!doc||!collector){notify('Selecciona un recolector para asignar la solicitud.',true);return;}
+    try{await finishOperational({...doc,estado:'asignada',recolector_id:collector},`Solicitud asignada a ${collector}.`,'solicitudes');}catch(error){report(error);}
+  }));
+}
+
+async function showPesajes() {
+  const docs = await list<Pesaje>('pesaje');
+  const role = sesion.role;
+  const canCapture = role === 'recolector';
+  const canVerify = role === 'operador_acopio' || role === 'admin_plataforma';
+  const assigned = (await list<SolicitudRecoleccion>('solicitud_recoleccion')).filter(request=>request.estado==='asignada'&&request.recolector_id===sesion.username);
+  const rows = docs.map(d => [esc(d.comercio_id),esc(d.recolector_id),esc(d.lineas.map(line => `${line.material}: ${line.peso_kg} kg`).join(', ')),esc(d.estado),esc(syncStatus(d)),esc(dateText(d.capturado_en)),`${canVerify && d.estado === 'pendiente_verificacion' ? `<button class="secondary-button" data-verify="${esc(d._id)}">Verificar</button>` : `<code>${esc(d._id)}</code>`}${d.sync_status === 'rejected' ? ` <button class="secondary-button" data-retry="${esc(d._id)}">Reintentar</button>` : ''}`]);
+  section('Registro de pesajes', 'Pesajes guardados localmente, con estado de envío y verificación.', `<div class="panel-heading"><div><h3>Pesajes</h3><p>${docs.length} registro(s) local(es)</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Comercio','Recolector','Material y peso','Verificación','Sincronización','Capturado','Acción'],rows)}`, canCapture ? addAction('Registrar pesaje') : '');
+  content.querySelector('#refresh-list')?.addEventListener('click', () => openView('pesajes'));
+  content.querySelectorAll<HTMLButtonElement>('[data-verify]').forEach(button => button.addEventListener('click', async () => { const doc=docs.find(item=>item._id===button.dataset.verify);if(!doc)return;try{await finishOperational({...doc,estado:'verificado' as EstadoPesaje,verificado_en:new Date().toISOString()},'Pesaje verificado; puntos acreditados.','pesajes','Verificación guardada; los puntos se acreditarán al sincronizar.');}catch(error){report(error);}}));
+  content.querySelectorAll<HTMLButtonElement>('[data-retry]').forEach(button=>button.addEventListener('click',async()=>{const doc=docs.find(item=>item._id===button.dataset.retry);if(!doc)return;const editable={...doc} as Record<string,unknown>;for(const key of ['_rev','remote_rev','sync_status','local_modified_at','sync_error','conflict_remote'])delete editable[key];const value=window.prompt('Corrige los campos del documento en formato JSON. Se conservarán su ID y tipo.',JSON.stringify(editable,null,2));if(value===null)return;try{const corrected=JSON.parse(value) as Documento;if(corrected._id!==doc._id||corrected.type!==doc.type)throw new Error('El ID y tipo del documento no se pueden cambiar.');await guardarLocal({...doc,...corrected} as Documento);await sincronizar();await openView('pesajes');}catch(error){report(error);}}));
+  if(canCapture)content.querySelector('#add-record')?.addEventListener('click',()=>{
+    if(!assigned.length){notify('No tienes solicitudes asignadas para registrar una recolección.',true);return;}
+    formDialog('Registrar pesaje de una solicitud', [['solicitud_id','Solicitud asignada','select'],['material','Material','select'],['peso_kg','Peso en kg','number']], async values=>{const request=assigned.find(item=>item._id===values.solicitud_id);if(!request)throw new Error('Selecciona una solicitud asignada.');const id=`pesaje:${crypto.randomUUID()}`;await finishOperational({_id:id,type:'pesaje',solicitud_id:request._id,comercio_id:request.comercio_id,recolector_id:sesion.username??'',lineas:[{material:values.material,peso_kg:Number(values.peso_kg)}],estado:'pendiente_verificacion',capturado_en:new Date().toISOString()},'Pesaje registrado; queda pendiente de verificación.','pesajes');},{solicitud_id:assigned.map(request=>({value:request._id,label:`${request._id} · ${request.comercio_id}`}))});
+  });
+}
+
+async function showPuntos() {
+  const localMovements=await list<MovimientoPuntos>('movimiento_puntos');
+  const isCommerce=sesion.role==='comercio'&&Boolean(sesion.comercioId);
+  const canQuery=sesion.role==='admin_plataforma'||sesion.role==='operador_acopio';
+  let rewards:Recompensa[]=[];
+  let rewardsError='';
+  try{rewards=(await api.rewards()).rewards;}catch(error){if(error instanceof ApiError&&(error.status===401||error.status===403))throw error;rewardsError=error instanceof ApiError?error.message:'No se pudo cargar el catálogo.';}
+
+  let serverBalance:number|null=null;
+  let serverMovements:MovimientoPuntos[]=[];
+  let balanceError='';
+  if(isCommerce){
+    try{const result=await api.saldoPuntos();serverBalance=result.saldo;serverMovements=result.movimientos;}
+    catch(error){if(error instanceof ApiError&&(error.status===401||error.status===403))throw error;balanceError=error instanceof ApiError?error.message:'No se pudo consultar el saldo del servidor.';}
   }
+  const pendingMovements=localMovements.filter(item=>item.sync_status==='pending'||item.sync_status==='conflict');
+  const serverIds=new Set(serverMovements.map(item=>item._id));
+  const movements=isCommerce&&serverBalance!==null
+    ? [...serverMovements.map(item=>({...item,sync_status:'synced' as const})),...pendingMovements.filter(item=>!serverIds.has(item._id))]
+    : localMovements;
+  const localBalance=localMovements.reduce((sum,item)=>sum+(item.concepto==='canje'?-item.puntos:item.puntos),0);
+  const balanceLabel=isCommerce
+    ? serverBalance===null?`No disponible · ${localBalance.toLocaleString()} pts local`: `${serverBalance.toLocaleString()} pts`
+    : canQuery?'Selecciona un comercio':'Solo disponible para comercios';
+  const balanceDetail=isCommerce
+    ? serverBalance===null?`${balanceError} Los canjes requieren conexión y saldo actualizado.`:`${serverMovements.length} movimiento(s) confirmados en el servidor · comercio ${sesion.comercioId}`
+    : canQuery?'Consulta un comercio para ver su saldo autoritativo y ledger.':'Consulta el saldo desde una cuenta de comercio.';
+  const rewardsContent=rewards.length
+    ? `<div class="reward-grid">${rewards.map(reward=>{const enough=serverBalance!==null&&serverBalance>=reward.costo_puntos;const label=serverBalance===null?'Saldo no disponible':enough?'Canjear':'Saldo insuficiente';return `<article class="panel reward-card"><span class="stat-icon purple">✧</span><h3>${esc(reward.nombre)}</h3><p>${esc(reward.descripcion||'Recompensa participante')}</p><strong>${reward.costo_puntos.toLocaleString()} pts</strong>${isCommerce?`<button class="primary-button" data-redeem="${esc(reward._id)}" data-cost="${reward.costo_puntos}" ${enough?'':'disabled'} title="${enough?'Solicitar canje':esc(label)}">${label}</button>`:''}</article>`;}).join('')}</div>`
+    : `<div class="empty-state"><span>✧</span><b>${rewardsError?'Catálogo no disponible':'No hay recompensas activas'}</b><p>${esc(rewardsError||'Las recompensas disponibles aparecerán aquí.')}</p></div>`;
+  section('Puntos y recompensas', 'Los puntos se acreditan al verificar pesajes; cada canje se valida contra el saldo del servidor y se registra en el ledger.', `<article class="balance-card"><div><span>Saldo autoritativo del servidor</span><strong id="server-balance">${esc(balanceLabel)}</strong></div>${canQuery?'<form id="balance-form" class="balance-form"><label for="balance-commerce">ID del comercio</label><input id="balance-commerce" name="comercio_id" required maxlength="200" placeholder="comercio:…"><button class="secondary-button" type="submit">Consultar saldo</button></form>':''}<p id="balance-detail" class="note">${esc(balanceDetail)}</p></article><div class="panel-heading"><div><h3>Catálogo de recompensas</h3><p>${isCommerce?'Los canjes requieren conexión y saldo suficiente confirmado.':'Consulta recompensas disponibles para los comercios.'}</p></div></div>${rewardsContent}<div class="panel-heading"><div><h3>Historial de movimientos</h3><p>Los canjes aparecen como descuentos; las acreditaciones, como puntos ganados.</p></div><button id="refresh-list" class="secondary-button">Actualizar lista</button></div>${table(['Comercio','Concepto','Puntos netos','Origen','Pesaje / solicitud','Regla','Sincronización','Fecha'],movements.map(item=>[esc(item.comercio_id),esc(item.concepto),esc(`${item.concepto==='canje'?'-':'+'}${item.puntos}`),esc(item.origen||'—'),esc(item.pesaje_id||item._id),esc(item.regla_version??'—'),esc(syncStatus(item)),esc(dateText(item.creado_en))]))}<div class="note">No se permiten acreditaciones manuales desde el cliente.</div>`);
+  content.querySelector('#refresh-list')?.addEventListener('click',()=>openView('puntos'));
+  const updateServerBalance=async(comercioId:string)=>{const detail=content.querySelector<HTMLElement>('#balance-detail');try{const result=await api.saldoPuntos(comercioId);const balance=content.querySelector<HTMLElement>('#server-balance');if(balance)balance.textContent=`${result.saldo.toLocaleString()} pts`;if(detail)detail.textContent=`${result.movimientos.length} movimiento(s) en el servidor · comercio ${result.comercio_id}`;}catch(error){if(detail)detail.textContent=error instanceof ApiError?error.message:'No se pudo consultar el saldo remoto.';}};
+  content.querySelector<HTMLFormElement>('#balance-form')?.addEventListener('submit',event=>{event.preventDefault();const form=new FormData(event.currentTarget as HTMLFormElement);void updateServerBalance(String(form.get('comercio_id')).trim());});
+  content.querySelectorAll<HTMLButtonElement>('[data-redeem]').forEach(button=>button.addEventListener('click',async()=>{
+    const cost=Number(button.dataset.cost);
+    if(serverBalance===null){notify('No se puede solicitar el canje sin confirmar el saldo del servidor.',true);return;}
+    if(serverBalance<cost){notify(`Saldo insuficiente. Se requieren ${cost.toLocaleString()} puntos y tienes ${serverBalance.toLocaleString()}.`,true);return;}
+    button.disabled=true;
+    const requestId=button.dataset.requestId||crypto.randomUUID();
+    button.dataset.requestId=requestId;
+    try{
+      const result=await api.redeem(button.dataset.redeem!,requestId);
+      await sincronizar();
+      await openView('puntos');
+      notify(result.idempotent?`Canje ya registrado: ${result.puntos.toLocaleString()} puntos descontados.`:`Canje confirmado: ${result.puntos.toLocaleString()} puntos descontados; saldo y movimientos actualizados.`);
+    }catch(error){
+      button.disabled=false;
+      if(error instanceof ApiError&&error.code==='saldo_insuficiente'){
+        await openView('puntos');
+        report(error);
+      }else report(error);
+    }
+  }));
+}
+
+async function showTeam() {
+  if(sesion.role!=='admin_plataforma'){section('Equipo y usuarios','Solo el administrador de plataforma puede crear cuentas. Operaciones asigna recolectores desde cada solicitud.','<p>El alta de usuarios está reservada al administrador.</p>');return;}
+  const commerces=await list<Comercio>('comercio');
+  section('Equipo y usuarios','Crea cuentas asociadas a los comercios participantes y habilita recolectores y operadores.','<p>Las cuentas se crean en CouchDB y los comercios se vinculan por su identificador.</p>',addAction('Crear usuario'));
+  content.querySelector('#add-record')?.addEventListener('click',()=>formDialog('Alta de usuario',[['username','Usuario','text'],['password','Contraseña (mínimo 12 caracteres)','text'],['role','Rol','select'],['comercio_id','Comercio asociado (solo cuentas de comercio)','select']],async values=>{await api.createUser({username:values.username,password:values.password,role:values.role as Rol,...(values.role==='comercio'?{comercio_id:values.comercio_id}:{})});await openView('equipo');notify(`Cuenta ${values.username} creada.`);},{role:Object.entries(roleLabels).filter(([role])=>role!=='admin_plataforma').map(([value,label])=>({value,label})),comercio_id:commerces.map(commerce=>({value:commerce._id,label:`${commerce.nombre} · ${commerce._id}`}))}));
+}
+
+type Field = [name: string, label: string, type: 'text'|'date'|'number'|'select'];
+type Option = { value: string; label: string };
+function formDialog(heading: string, fields: Field[], submit: (values: Record<string,string>) => Promise<void>, optionSets: Record<string,Option[]> = {}) {
+  const select = (name:string) => { const custom=optionSets[name];if(custom)return `${name==='solicitud_id'||name==='comercio_id'?'<option value="">Selecciona una opción</option>':''}${custom.map(option=>`<option value="${esc(option.value)}">${esc(option.label)}</option>`).join('')}`;return name==='concepto' ? '<option value="acreditacion">Acreditación</option><option value="canje">Canje</option>' : name==='material' ? '<option value="carton">Cartón</option><option value="papel">Papel</option><option value="plastico">Plástico</option><option value="vidrio">Vidrio</option><option value="metal">Metal</option><option value="aluminio">Aluminio</option>' : name==='role'?'<option value="recolector">Recolector</option><option value="operador_acopio">Operador</option><option value="comercio">Comercio</option>':''; };
+  content.insertAdjacentHTML('afterbegin',`<article class="panel editor-panel"><div class="panel-heading"><div><h3>${esc(heading)}</h3><p>Los cambios se envían a la API.</p></div><button type="button" id="close-form" class="secondary-button">Cerrar</button></div><form id="record-form" class="data-form">${fields.map(([name,label,type])=>`<label>${esc(label)}${type==='select'?`<select name="${esc(name)}" required>${select(name)}</select>`:`<input name="${esc(name)}" type="${name==='password'?'password':type}" ${type==='number'?'min="0.01" max="1000" step="0.01"':''} required maxlength="256" ${name==='password'?'minlength="12"':''}>`}</label>`).join('')}<button class="primary-button" type="submit">Guardar</button></form><div id="form-feedback" class="feedback" role="status"></div></article>`);
+  const commerceField=content.querySelector<HTMLInputElement>('input[name="comercio_id"]');
+  if(commerceField&&sesion.role==='comercio'&&sesion.comercioId){commerceField.value=sesion.comercioId;commerceField.readOnly=true;}
+  content.querySelector('#close-form')?.addEventListener('click',()=>content.querySelector('.editor-panel')?.remove());
+  content.querySelector<HTMLFormElement>('#record-form')!.addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.currentTarget as HTMLFormElement);const values:Record<string,string>={};form.forEach((value,key)=>{values[key]=String(value).trim();});try{await submit(values);}catch(error){const target=content.querySelector<HTMLElement>('#form-feedback');if(target){target.textContent=error instanceof ApiError?error.message:'No se pudo guardar el registro.';target.classList.add('error');}}});
+}
+
+async function openView(view: string) {
+  activeView=view;document.querySelectorAll<HTMLButtonElement>('.nav-link').forEach(button=>button.classList.toggle('active',button.dataset.view===view));title.textContent=titles[view]??titles.inicio;
+  if(!sesion.token){renderLogin();return;}
+  try { if(view==='inicio')await renderDashboard();else if(view==='comercios')await showComercios();else if(view==='solicitudes')await showSolicitudes();else if(view==='pesajes')await showPesajes();else if(view==='puntos')await showPuntos();else if(view==='equipo')await showTeam();await mostrarConflictos(); }
+  catch(error){report(error);}
+}
+
+async function mostrarConflictos() {
+  const conflicts=(await listarDocumentos()).filter(doc=>doc.sync_status==='conflict');
+  if(!conflicts.length)return;
+  content.insertAdjacentHTML('beforeend',`<article class="panel conflict-panel"><div class="panel-heading"><div><h3>Conflictos pendientes (${conflicts.length})</h3><p>Conservamos ambas versiones. Elige cuál debe quedar activa.</p></div></div>${conflicts.map(doc=>`<div class="conflict-row"><code>${esc(doc._id)}</code>${doc.conflict_remote?`<span>${esc(doc.sync_error||'Conflicto de revisión')}</span><button class="secondary-button" data-conflict="${esc(doc._id)}" data-choice="remote">Usar servidor</button><button class="secondary-button" data-conflict="${esc(doc._id)}" data-choice="local">Conservar local</button>`:`<span>La versión remota no está disponible para esta cuenta; se conserva el registro local para revisión administrativa.</span>`}</div>`).join('')}</article>`);
+  content.querySelectorAll<HTMLButtonElement>('[data-conflict]').forEach(button=>button.addEventListener('click',async()=>{try{await resolverConflicto(button.dataset.conflict!,button.dataset.choice as 'local'|'remote');await openView(activeView);}catch(error){report(error);}}));
+}
+
+const syncLabels:Record<SyncSnapshot['state'],string>={connected:'Conectado',offline:'Sin conexión',pending:'Pendiente de sincronizar',syncing:'Sincronizando…',error:'Error de sincronización'};
+let previousSyncState:SyncSnapshot['state']|undefined;
+observarSync(value=>{
+  const target=document.querySelector<HTMLElement>('#api-state');
+  if(target)target.textContent=`${syncLabels[value.state]} · ${value.pending} pendiente(s)${value.conflicts?` · ${value.conflicts} conflicto(s)`:''}${value.rejected?` · ${value.rejected} rechazado(s)`:''}${value.state==='error'&&value.message?` · ${value.message}`:''}`;
+  document.querySelector<HTMLElement>('#sync-indicator')?.setAttribute('data-state',value.state);
+  const syncButton=document.querySelector<HTMLButtonElement>('#sync-button');
+  if(syncButton){syncButton.disabled=value.state==='syncing';syncButton.textContent=value.state==='syncing'?'Sincronizando…':'Sincronizar';}
+  if(previousSyncState==='syncing'&&value.state==='connected'&&sesion.token&&!content.querySelector('#record-form'))void openView(activeView);
+  previousSyncState=value.state;
 });
 
-document.getElementById('btnConectarSync')?.addEventListener('click', () => {
-  const comercioId = (document.getElementById('comercioId') as HTMLInputElement).value;
-  const statusEl = document.getElementById('estadoSync');
-  const tokenJWT = 'token_simulado_fase3';
-
-  if (statusEl) {
-    statusEl.style.color = '#f0ad4e';
-    statusEl.textContent = 'Estado Sync: Conectando con Axum/CouchDB...';
-  }
-
-  try {
-  const remota = new PouchDB(`http://localhost:8091/sync/comercio_${comercioId}`, {
-      fetch: (url: any, opts: any) => {
-        (opts!.headers as Headers).set('Authorization', `Bearer ${tokenJWT}`);
-        return PouchDB.fetch(url, opts);
-      },
-    });
-
-    localDB.sync(remota, { live: true, retry: true, batch_size: 100 })
-      .on('paused', () => {
-        if (statusEl) {
-          statusEl.style.color = '#28a745';
-          statusEl.textContent = 'Estado Sync: Al día (Sincronizado)';
-        }
-      })
-      .on('active', () => {
-        if (statusEl) {
-          statusEl.style.color = '#0275d8';
-          statusEl.textContent = 'Estado Sync: Sincronizando cambios...';
-        }
-      })
-      .on('error', (err: any) => {
-        if (statusEl) {
-          statusEl.style.color = '#d9534f';
-          statusEl.textContent = `Estado Sync: Error de red / sin conexión (${err.message || 'offline'})`;
-        }
-      });
-  } catch (e) {
-    console.error(e);
-  }
-});
-
-document.getElementById('btnConsultar')?.addEventListener('click', async () => {
-  const res = document.getElementById('resultadoSaldo');
-  try {
-    const allDocs = await localDB.allDocs({ include_docs: true });
-    const pesajes = allDocs.rows.filter((r: any) => (r.doc as any)?.type === 'pesaje');
-    if (res) {
-      res.textContent = `Pesajes persistidos localmente: ${pesajes.length} registro(s)`;
-    }
-  } catch (err) {
-    if (res) {
-      res.textContent = `Error al consultar: ${err}`;
-    }
-  }
-});
+document.querySelectorAll<HTMLButtonElement>('.nav-link').forEach(button=>button.addEventListener('click',()=>openView(button.dataset.view??'inicio')));
+document.querySelector<HTMLButtonElement>('#session-button')!.addEventListener('click',async()=>{if(sesion.token){sesion.clear();await cambiarAlmacenPorSesion();updateProfile();renderLogin();}else renderLogin();});
+document.querySelector<HTMLButtonElement>('#sync-button')!.addEventListener('click',()=>{if(!sesion.token){renderLogin();return;}void sincronizar();});
+updateProfile();
+if(sesion.token){iniciarSincronizacion();void openView(activeView);}else renderLogin();

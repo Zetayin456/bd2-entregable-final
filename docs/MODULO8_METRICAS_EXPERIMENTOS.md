@@ -1,0 +1,66 @@
+# Módulo 8: instrumentación y corridas reproducibles
+
+## Métricas de la API
+
+La ruta pública `GET /metrics` expone el formato de Prometheus. El middleware instrumenta las respuestas HTTP sin registrar IDs de documentos como etiquetas:
+
+- `http_requests_total{method,route,status}`: peticiones agregadas por método, ruta normalizada y estado.
+- `http_request_duration_seconds{method,route}`: histograma con buckets configurados entre 5 ms y 10 s.
+- `business_events_total{event}`: usuarios creados, comercios, etapas de solicitud, pesajes capturados/verificados, créditos, canjes exitosos, reintentos de canje y rechazos por saldo insuficiente.
+
+Prometheus scrapea `api:8080/metrics` y `cadvisor:8080`, persiste sus series en el volumen `prometheus_data` y publica su interfaz en `http://localhost:9090`. cAdvisor expone contadores de CPU y working set de memoria en el entorno observado. La atribución por contenedor depende de que cAdvisor exporte etiquetas Docker/Compose para cada contenedor; no debe darse por supuesta.
+
+### Alcance comprobado de CPU, RAM e hilos
+
+En la configuración, `scripts/run_experiment.ps1` consulta `container_cpu_usage_seconds_total` y `container_memory_working_set_bytes` filtrando `container_label_com_docker_compose_service="api"`. Sin embargo, los JSON experimentales guardados inspeccionados tienen `data.result=[]` para ambas consultas. Por tanto, **las corridas archivadas no contienen mediciones válidas atribuibles al contenedor API** y no deben usarse para afirmar CPU/RAM del backend. Sí se confirmó en el Prometheus activo que cAdvisor expone series de CPU y working set de memoria para cgroups agregados del host/Docker (por ejemplo, `id="/docker"`); esas series no incluyen etiquetas de servicio Compose y no permiten atribuir el consumo al API. Son una comprobación de disponibilidad de telemetría a nivel agregado, no un resultado experimental por API.
+
+Ni el middleware de métricas del backend ni las consultas guardadas instrumentan o recogen cantidad de hilos del proceso. La consulta directa a `container_threads` tampoco devolvió series en el entorno inspeccionado. En consecuencia, el uso de hilos queda **sin medir**; no se estima ni se infiere desde CPU, concurrencia, VUs o configuración del runtime. Para cerrar esta métrica habría que añadir una fuente verificable de conteo de threads del proceso API y persistirla en cada corrida.
+
+## Flujo de k6
+
+`load/reciclaje.js` autentica al administrador y crea cuentas de prueba temporales para operador y recolector. Cada iteración registra un comercio, crea y aprueba una solicitud, asigna un recolector, captura y verifica un pesaje y consulta el saldo acreditado. Los nombres de ruta k6 son normalizados para que los IDs no produzcan series de alta cardinalidad.
+
+Se exportan `business_step_duration_ms`, `business_flow_duration_ms`, `business_step_success`, `business_flow_success`, `business_steps_total` y `business_flows_completed_total`, además de las métricas HTTP integradas de k6. Cada serie k6 recibe `run_id` y `network_profile`.
+
+## Corrida recomendada
+
+Desde PowerShell en la raíz del repositorio:
+
+```powershell
+docker compose up --build -d api prometheus cadvisor client-sim
+Invoke-RestMethod http://localhost:8091/metrics
+Invoke-RestMethod http://localhost:9090/targets
+.\scripts\run_experiment.ps1 -Profile degradado -Vus 10 -Duration 2m
+```
+
+El script ejecuta el target Docker `verify` (unitarias, `cargo check` y `cargo clippy`), confirma que Prometheus scrapea la API, instala netem en las interfaces de salida de API y cliente k6, ejecuta la carga, consulta Prometheus y limpia las reglas de red incluso si k6 falla. `-SkipQualityChecks` permite repetir corridas sin reconstruir las verificaciones estáticas una vez que pasaron.
+
+Cada corrida produce `results/<run-id>-k6.json`, `results/<run-id>-prometheus.json` y una fila acumulada en `results/observations.csv`. Prometheus conserva la serie temporal en el volumen `prometheus_data`; el JSON guarda el perfil, carga, duración, fechas y respuestas de consultas HTTP, latencia, CPU, memoria y `up` de cAdvisor. Una respuesta Prometheus con `status=success` pero `data.result=[]` es una consulta sin muestras, no una medición igual a cero. En las observaciones revisadas, las consultas CPU/RAM filtradas al servicio `api` quedaron vacías; consúltese el apartado anterior y no se reporten como métricas medidas del API. El CSV registra throughput HTTP total, latencia k6 promedio/p95 y checks; no contiene CPU, RAM ni hilos.
+
+Después de al menos tres corridas por condición experimental:
+
+```powershell
+python analysis/analizar.py results/observations.csv --output results/analysis.json
+```
+
+El analizador calcula descriptivos, evalúa normalidad Shapiro-Wilk, selecciona ANOVA de una vía o Kruskal-Wallis, realiza comparaciones por pares con ajuste Holm y reporta delta de Cliff. No genera observaciones ni declara hipótesis como aceptadas cuando no existen datos suficientes. Las comparaciones deben usar el mismo nivel (API con API) y no mezclar resultados pgbench con throughput HTTP.
+
+El baseline PostgreSQL/`pgbench` es exclusivamente una carga de persistencia SQL (upsert y lectura indexada sobre `baseline_documents`). No es un backend API alternativo: no reproduce autenticación/RBAC, reglas de negocio, transiciones ni cliente HTTP. La salida k6 representa el flujo autenticado de la API Rust+CouchDB; PouchDB participa en el cliente para la cola offline. El analizador estadístico trabaja solo sobre las condiciones k6 y deja explícito que no realiza contraste inferencial PostgreSQL-versus-API. Los datos permiten describir persistencia frente al comportamiento de la arquitectura completa, pero no sostienen una afirmación de superioridad entre APIs equivalentes ni aíslan causalmente el motor de base de datos.
+
+Parámetros útiles:
+
+```powershell
+.\scripts\run_experiment.ps1 -Profile ideal -Vus 1 -Duration 1m
+.\scripts\run_experiment.ps1 -Profile intermitente -Vus 25 -Duration 5m -SkipQualityChecks
+.\scripts\run_experiment.ps1 -Profile degradado -Vus 10 -Duration 2m -InjectOutage
+docker build --target verify -t reciclaje-backend-verify ./backend
+```
+
+Los perfiles netem se instalan en ambos extremos: el API usa `eth1` (red `edge_net`) y el cliente k6 comparte `client-sim` en `eth0`. `ideal` aproxima 20 ms RTT sin pérdida; `degradado`, 120 ms y 2%; `intermitente`, 250 ms y 5%. Si el orden de interfaces de Docker difiere, se puede cambiar con `NETEM_API_INTERFACE` y `NETEM_CLIENT_INTERFACE`. `corte` pierde el 100% de paquetes para una comprobación manual; `clear`/`limpiar` elimina la disciplina de cola. Ejemplo de limpieza manual:
+
+```powershell
+docker compose run --rm -e NETEM_PROFILE=clear netem-api
+docker compose run --rm -e NETEM_PROFILE=clear netem-client
+```
+
+Use un `.env` local válido y una base de laboratorio descartable. El setup de k6 crea usuarios y sus iteraciones dejan documentos de prueba en CouchDB. No ejecute corridas contra datos productivos. Los resultados son observaciones del entorno de laboratorio; el repositorio no establece umbrales de aceptación ni implica por sí mismo una conclusión estadística.
